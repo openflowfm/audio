@@ -74,12 +74,15 @@ retained failure reports, launch errors/timeouts, HTML escaping, completion hash
 and capability-gap separation. Test fixtures are not performance evidence.
 
 The generated report groups canonical statistics and resource charts by workload.
-Candidate identity is explicit: audio[flow] MVP (ours), Direct loop baseline and
-FunDSP reference. CPU/allocation and coarse I/O totals are divided by validated
+Candidate identity is explicit: audio[flow] MVP (ours), Direct reference, FunDSP
+scalar reference, FunDSP native block reference and Oddio reference. Historical
+three-candidate runs retain scalar FunDSP identity without invented new series. CPU/allocation and coarse I/O totals are divided by validated
 profile trials; the denominator is displayed for each candidate. RSS and Rust live
 requested-byte peaks remain high-water values. Primary wall-time charts show every retained trial and the lower-middle median,
 with a zero origin and a shared scale within each workload comparison. Diagnostic
-CPU breakdowns show phase means in CPU ns/output frame, separately from wall time. Uncollected and unsupported metrics remain labeled. Canonical timing rows and charts compare only ours and FunDSP. The faster eligible
+CPU breakdowns show phase means in CPU ns/output frame, separately from wall time. Uncollected and unsupported metrics remain labeled. The all-candidate inventory keeps actual canonical durations visible and neutral
+except the blue Direct reference. Independent pairwise tables and charts compare
+ours with each named eligible reference; no global competitive rank is implied. The faster eligible
 median is green. The slower is yellow through 10% slower and red above 10%, with
 percent slower calculated against the faster median and displayed. The threshold
 is `SLOWER_YELLOW_PERCENT` in `harness/impact_charts.py`. Exact ties say tied and stay
@@ -118,10 +121,24 @@ Allocation/memory/process charts and raw resource time-series are secondary
 expandable details. Trial counts, units and timing scope accompany the main charts.
 Historical artifacts are not regenerated in place when previewing a design.
 
-Canonical ours-versus-FunDSP columns show the absolute median time difference in
+Each ours-versus-reference pair shows the absolute median time difference in
 automatic ns/µs/ms/s units with less/more direction, percent less/more time using
-FunDSP as denominator, and the ours/FunDSP time ratio. These are elapsed-time
-comparisons, not throughput speedup percentages. Direct and FunDSP rows show em
-dashes in these ours-only columns. Unsupported comparisons say unavailable; a
-zero FunDSP median makes percentages and ratios undefined. The separate color
-threshold column uses the faster competitor denominator and is labeled accordingly.
+that named reference as denominator, and the ours/reference time ratio. These
+are elapsed-time comparisons, not throughput speedup percentages. The reference
+row shows em dashes in ours-only columns. Unsupported comparisons say unavailable;
+a zero reference median makes percentages and ratios undefined. The separate
+color-threshold column uses the faster competitor denominator within that pair.
+
+The canonical manifest declares candidate identities, requiring a complete
+workload × candidate aggregate inventory, including capability gaps. New native
+reference timings require their own literal gates and exact workload/partition
+checks, not scalar FunDSP's gates. `native_gate_requirements` explicitly maps each
+native candidate/workload to required gate IDs; all matching retained partitions
+must pass. Unrelated-mode literal mismatches remain retained evidence and do not
+exclude an independently conforming mode. Profiles carry `required_native_gate_ids`.
+Empty requirements permit a profile gap only with explicit capability-gap checks;
+an unexpected failure is never relabeled as unsupported. Pairwise timing scopes must match. The profile
+matrix covers all five candidates for loop-32 and dense bursts; unsupported
+profiles remain gap evidence. Native block FunDSP names its block API separately
+from the historical scalar adapter; this is not a claim that every internal node
+uses SIMD. Oddio is independently identified and never assigned fabricated values.

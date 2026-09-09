@@ -109,3 +109,21 @@ fn fused_flat_render_preserves_no_allocation_or_free_boundary() {
         assert_eq!(output[0], workload.expected());
     }
 }
+
+#[test]
+fn native_block_loop_render_does_not_allocate_or_free() {
+    use audio_flow_harness::study::{Candidate, Mode, Prepared, Workload};
+    for candidate in [Candidate::FundspBlock, Candidate::Oddio] {
+        let w = Workload::new("native-allocation", 64, 4096, Mode::Loop, 128, 23);
+        let mut adapter = Prepared::new(&w, candidate).unwrap();
+        adapter.enqueue(w.batches()).unwrap();
+        let mut output = vec![vec![0.; 4096]];
+        CALLS.with(|calls| calls.set(0));
+        ACTIVE.with(|active| active.set(true));
+        let result = adapter.render_into(&mut output);
+        ACTIVE.with(|active| active.set(false));
+        assert!(result.is_ok());
+        assert_eq!(CALLS.with(Cell::get), 0);
+        assert_eq!(output[0], w.expected());
+    }
+}

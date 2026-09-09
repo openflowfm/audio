@@ -6,12 +6,8 @@ import html
 import json
 from pathlib import Path
 
-NAMES = {"Offline": "audio[flow] MVP (ours)", "Direct": "Direct reference", "Fundsp": "FunDSP reference"}
-SCOPES = {
-    "Offline": "Graph, command batches, native positions",
-    "Direct": "Purpose-built implementation of this workload.",
-    "Fundsp": "WavePlayer + native gain; adapter schedule, sum and positions",
-}
+from candidates import NAMES, SCOPES, LITERAL_KEYS, present_candidates, literal_checks, literals_pass
+from reference_report import canonical_views
 
 
 def checksum(data):
@@ -49,6 +45,29 @@ def read_study(directory):
     pairs = {(a["workload"], a["candidate"]) for a in summaries["aggregates"]}
     if len(pairs) != len(summaries["aggregates"]):
         raise ValueError("duplicate aggregate identity")
+    if any(w not in workload_map or c not in NAMES for w,c in pairs):
+        raise ValueError('unknown aggregate workload or candidate')
+    declared = manifest.get('candidates')
+    if declared is not None:
+        if not declared or len(set(declared)) != len(declared) or any(c not in NAMES for c in declared):
+            raise ValueError('invalid candidate manifest')
+        if pairs != {(w,c) for w in workload_map for c in declared}:
+            raise ValueError('incomplete declared candidate/workload coverage')
+        if any(not literal_checks(conformance,c) for c in declared):
+            raise ValueError('missing declared candidate literal gates')
+    elif any(c in ('FundspBlock','Oddio') for _,c in pairs):
+        raise ValueError('new references require declared candidate coverage')
+    native_pairs = {(w,c) for w,c in pairs if c in ('FundspBlock','Oddio')}
+    requirements = manifest.get('native_gate_requirements', [])
+    required = {(r['workload'],r['candidate']):r['gate_ids'] for r in requirements}
+    if len(required)!=len(requirements) or set(required)!=native_pairs:
+        raise ValueError('missing or duplicate native gate requirements')
+    for key, ids in required.items():
+        if not isinstance(ids,list) or len(set(ids))!=len(ids) or any(not isinstance(i,str) for i in ids):
+            raise ValueError('invalid native gate requirements')
+        available = {g.get('id') for g in literal_checks(conformance,key[1])}
+        if not set(ids)<=available:
+            raise ValueError('missing required native literal gate')
     integer_fields = ("trial", "order", "elapsed_ns", "preparation_ns", "frames", "sample_count", "block")
     orders = set()
     for trial in trials:
@@ -66,10 +85,8 @@ def read_study(directory):
         matching = [t for t in trials if (t["workload"], t["candidate"]) == pair]
         if aggregate["eligible"]:
             checks = [c for c in conformance["checks"] if (c["workload"], c["candidate"]) == pair]
-            literal = conformance["literal_offline"] if pair[1] == "Offline" else conformance["first_direct" if pair[1] == "Direct" else "first_fundsp"]["cases"]
-            literals_pass = bool(literal) and all(c["passed"] if pair[1] == "Offline" else c["outcome"] == "pass" for c in literal)
-            if not literals_pass or sorted(c["block"] for c in checks) != sorted(manifest["conformance_blocks"]) or any(c["outcome"] != "pass" for c in checks):
-                raise ValueError("performance claimed without passing correctness gates")
+            if not literals_pass(conformance,pair[1],required.get(pair)) or sorted(c['block'] for c in checks) != sorted(manifest['conformance_blocks']) or any(c['outcome'] != 'pass' for c in checks):
+                raise ValueError('performance claimed without passing correctness gates')
             if any((e["workload"], e["candidate"]) == pair for e in conformance["execution_errors"]):
                 raise ValueError("performance claimed for a failed execution")
             if len(matching) != manifest["repeats"] or aggregate["repeats"] != len(matching) or [t["trial"] for t in matching] != list(range(manifest["repeats"])):
@@ -85,6 +102,9 @@ def read_study(directory):
                 raise ValueError("derived summary disagrees with raw timings")
         elif aggregate["total_ns"] or aggregate["total_frames"] or aggregate["durations_ns"] or aggregate["preparation_ns"] or any(aggregate[key] is not None for key in ("min_ns", "max_ns", "median_ns")):
             raise ValueError("ineligible workload has comparative metrics")
+    for workload in workload_map:
+        if len({t['scope'] for t in trials if t['workload']==workload}) > 1:
+            raise ValueError('mixed timing scopes across candidate comparison')
     return manifest, conformance, workloads, trials, summaries["aggregates"]
 
 
@@ -97,45 +117,28 @@ def milliseconds(ns):
 
 
 def plot(aggregates, title):
-    return duration_plot(title, [(NAMES[a['candidate']], a['durations_ns'] if a['eligible'] else []) for a in aggregates], 'Uninstrumented canonical durations.', bold_indices=tuple(i for i,a in enumerate(aggregates) if a['candidate']=='Offline'), canonical_candidates=[a['candidate'] for a in aggregates])
+    return duration_plot(title, [(NAMES[a['candidate']], a['durations_ns'] if a['eligible'] else []) for a in aggregates], 'Uninstrumented canonical durations.', bold_indices=tuple(i for i,a in enumerate(aggregates) if a['candidate']=='Offline'), canonical_candidates=[a['candidate'] for a in aggregates],inventory=True)
 
 
 def build_report(directory):
     manifest, conformance, workloads, trials, summaries = read_study(directory)
     counts = {key: sum(c["outcome"] == key for c in conformance["checks"]) for key in ("pass", "fail", "capability_gap")}
     literal = conformance["literal_offline"]
-    first_cases = conformance["first_direct"]["cases"] + conformance["first_fundsp"]["cases"]
+    first_cases = [c for candidate in present_candidates(summaries) if candidate in ('Direct','Fundsp') for c in literal_checks(conformance,c)]
     buffer_sizes = sorted({t["output_buffer_bytes"] for t in trials})
     buffer_label = f"{buffer_sizes[0]:,}–{buffer_sizes[-1]:,} bytes" if buffer_sizes else "unavailable (no timed trials)"
     sections = []
     for w in workloads:
         event_label = f" · {len(w['events']):,} batches / {sum(len(b['commands']) for b in w['events']):,} commands" if 'events' in w else ''
         rows = [a for a in summaries if a["workload"] == w["id"]]
-        table = []
-        ranks, comparison_notes = canonical_comparison([a['candidate'] for a in rows], [a['median_ns'] if a['eligible'] else None for a in rows])
-        canonical_medians = {a['candidate']: a['median_ns'] for a in rows if a['eligible']}
-        relative = relative_to_fundsp(canonical_medians.get('Offline'), canonical_medians.get('Fundsp'))
-        for a, rank, comparison_note in zip(rows, ranks, comparison_notes):
-            checks = [c for c in conformance["checks"] if c["workload"] == w["id"] and c["candidate"] == a["candidate"]]
-            status = "pass" if all(c["outcome"] == "pass" for c in checks) else "; ".join(sorted({c["outcome"] for c in checks}))
-            if a["eligible"]:
-                prep = sorted(a["preparation_ns"])[(len(a["preparation_ns"])-1)//2]
-                throughput = a["total_frames"] * 1_000_000_000 / a["total_ns"] if a["total_ns"] else 0
-                metrics = f'<td>{milliseconds(a["median_ns"])}</td><td>{milliseconds(a["min_ns"])}–{milliseconds(a["max_ns"])}</td><td>{throughput:,.0f}</td><td>{milliseconds(prep)}</td>'
-            else:
-                reason = next((c["detail"] for c in checks if c["detail"]), "Excluded by correctness gate")
-                metrics = f'<td colspan="4">{esc(reason)}</td>'
-            row_class = rank + (' ours-row' if a['candidate'] == 'Offline' else '')
-            relative_cells = ''.join('<td>'+esc(v)+'</td>' for v in (relative if a['candidate']=='Offline' else ('—',)*3))
-            table.append(f'<tr class="{row_class}"><th scope="row">{esc(NAMES[a["candidate"]])}</th><td>{esc(status)}</td>{metrics}<td>{esc(comparison_note)}</td>{relative_cells}</tr>')
         selected = [t for t in trials if t["workload"] == w["id"]]
         rawrows = "".join(f'<tr><td>{esc(NAMES[t["candidate"]])}</td><td>{t["trial"]+1}</td><td>{t["order"]}</td><td>{t["elapsed_ns"]}</td><td>{t["preparation_ns"]}</td><td>{t["frames"]}</td></tr>' for t in selected)
         sections.append(f'''<section id="{esc(w['id'])}"><h2>{esc(w['id'])}</h2>
 <p>{w['voices']} independent voices · {w['frames']:,} mono frames ({w['frames']/48000:.3f} s of audio) · seed {w['seed']} · {esc(w['mode'])}{event_label}{f" · burst period {w['period']} frames" if w['mode']=='Bursts' else ''}</p>
-{plot(rows,w['id'])}<div class="table-scroll"><table><thead><tr><th>Candidate</th><th>Conformance</th><th>Median ms</th><th>Observed range ms</th><th>Frames/s</th><th>Prep median ms</th><th>Vs faster (ours / FunDSP)</th><th>Ours vs FunDSP: time difference</th><th>Ours vs FunDSP: % time (÷ FunDSP)</th><th>Ours / FunDSP time ratio</th></tr></thead><tbody>{''.join(table)}</tbody></table></div>
+{canonical_views(rows, [c for c in conformance['checks'] if c['workload']==w['id']], manifest['timing_scope'], manifest['preparation_scope'], present_candidates(summaries),conformance,manifest.get('native_gate_requirements', []))}
 <details><summary>Retained raw trials for this workload</summary><div class="table-scroll"><table><thead><tr><th>Candidate</th><th>Trial</th><th>Execution order</th><th>Render ns</th><th>Preparation ns</th><th>Frames</th></tr></thead><tbody>{rawrows}</tbody></table></div></details></section>''')
     links = " · ".join(f'<a href="{name}">{label}</a>' for name,label in [("manifest.json","Environment"),("workloads.json","Workloads and seeds"),("conformance.json","Conformance evidence"),("timings.jsonl","Raw integer timings"),("summary.json","Derived summary"),("complete.json","Completion checksums")])
-    scopes = "".join(f'<tr><th>{esc(NAMES[key])}</th><td>{esc(scope)}</td></tr>' for key,scope in SCOPES.items())
+    scopes = "".join(f'<tr><th>{esc(NAMES[key])}</th><td>{esc(scope)}</td></tr>' for key,scope in SCOPES.items() if key in present_candidates(summaries))
     navigation = " · ".join(f'<a href="#{esc(w["id"])}">{esc(w["id"])}</a>' for w in workloads)
     limitations = "".join(f'<li>{esc(item)}</li>' for item in manifest["limitations"])
     gates = "".join(f'<li>{esc(g["id"])} · blocks {esc(g.get("partitions", []))}: {"pass" if g["passed"] else "FAIL"}</li>' for g in literal)

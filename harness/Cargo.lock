@@ -25,6 +25,7 @@ name = "audio-flow-harness"
 version = "0.1.0"
 dependencies = [
  "fundsp",
+ "oddio",
  "serde",
  "serde_json",
 ]
@@ -166,6 +167,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "mint"
+version = "0.5.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
+
+[[package]]
 name = "num-complex"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -192,6 +199,15 @@ checksum = "60a6096447d657bfba01c49d38338b6c8e68e0e34d595360345375b798a4a765"
 dependencies = [
  "generic-array",
  "num-traits",
+]
+
+[[package]]
+name = "oddio"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c287b2b60511f53bd87e59adca987a46d4bdde6f16ad5cfa89531bffca344cf2"
+dependencies = [
+ "mint",
 ]
 
 [[package]]

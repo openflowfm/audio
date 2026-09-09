@@ -5,21 +5,23 @@ from html import escape as esc
 RANK_COLORS = {'timing-low': '#25834b', 'timing-middle': '#c69a13', 'timing-high': '#c34141', 'timing-reference': '#2875bf', '': '#536a80'}
 SLOWER_YELLOW_PERCENT = 10
 RANK_STYLE = '.timing-reference text{fill:#205a96}.impact svg g[font-weight="700"] text{font-weight:700}.timing-reference{background:#e4effb;color:#205a96}.timing-low{background:#e1f5e6;color:#18552c}.timing-middle{background:#fff2bf;color:#695100}.timing-high{background:#fbe7e7;color:#852d2d}.ours-row{font-weight:700}'
-RANK_NOTE = f'Canonical timing compares only audio[flow] and FunDSP: faster green; slower yellow up to {SLOWER_YELLOW_PERCENT}% slower, red above {SLOWER_YELLOW_PERCENT}%. Percentages use the faster eligible median. Exact ties and missing comparisons stay neutral. Direct reference is always blue and excluded from this comparison. Our row is bold. Controlled strategy comparisons remain separate: lower median green, higher red within each replicate; ties neutral. Diagnostic resources stay neutral.'
+RANK_NOTE = f'Each canonical pair compares audio[flow] with one named reference independently: faster green; slower yellow up to {SLOWER_YELLOW_PERCENT}% slower, red above {SLOWER_YELLOW_PERCENT}%. Percentages use the faster eligible median. Exact ties and missing comparisons stay neutral. Direct reference is always blue and excluded from this comparison. Our row is bold. The all-candidate duration inventory is neutral except Direct; competitive colors belong only to the separate pairwise comparisons. Controlled strategy comparisons remain separate: lower median green, higher red within each replicate; ties neutral. Diagnostic resources stay neutral.'
 
 
-def canonical_comparison(candidates, values):
-    """Compare only eligible Offline/Fundsp medians; Direct never sets the benchmark."""
+def canonical_comparison(candidates, values, reference="Fundsp"):
+    """Compare eligible Offline with one explicit reference, never Direct."""
+    if reference in ("Offline", "Direct"):
+        raise ValueError("invalid competitive reference")
     medians = dict(zip(candidates, values))
     ranks = {c: 'timing-reference' if c == 'Direct' else '' for c in candidates}
     notes = {c: 'Reference only' if c == 'Direct' else 'No comparison' for c in candidates}
-    ours, fundsp = medians.get('Offline'), medians.get('Fundsp')
+    ours, fundsp = medians.get('Offline'), medians.get(reference)
     if ours is not None and fundsp is not None:
         if ours == fundsp:
-            for c in ('Offline', 'Fundsp'):
+            for c in ('Offline', reference):
                 notes[c] = 'Tied (0.00%)'
         else:
-            fast, slow = ('Offline', 'Fundsp') if ours < fundsp else ('Fundsp', 'Offline')
+            fast, slow = ('Offline', reference) if ours < fundsp else (reference, 'Offline')
             faster, slower = medians[fast], medians[slow]
             ranks[fast] = 'timing-low'
             notes[fast] = '0.00% vs faster'
@@ -38,7 +40,7 @@ def duration_unit(ns):
     return f'{value:.4g} ns'
 
 
-def relative_to_fundsp(ours, fundsp):
+def relative_to_reference(ours, fundsp, label="reference"):
     """Ours-minus-reference direction; percentages and time ratio use FunDSP."""
     if ours is None or fundsp is None:
         return ('Unavailable',) * 3
@@ -46,9 +48,14 @@ def relative_to_fundsp(ours, fundsp):
     direction = 'less' if difference < 0 else 'more'
     delta = 'Tied (0 ns)' if difference == 0 else f'{duration_unit(difference)} {direction}'
     if fundsp == 0:
-        return delta, 'Undefined (FunDSP = 0)', 'Undefined (FunDSP = 0)'
+        return delta, f'Undefined ({label} = 0)', f'Undefined ({label} = 0)'
     percent = 'Tied (0.00%)' if difference == 0 else f'{100*abs(difference)/fundsp:.2f}% {direction}'
     return delta, percent, f'{ours/fundsp:.4g}×'
+
+
+def relative_to_fundsp(ours, fundsp):
+    """Backward-compatible scalar reference helper."""
+    return relative_to_reference(ours, fundsp, 'FunDSP')
 
 
 def duration_ranks(values):
@@ -58,7 +65,7 @@ def duration_ranks(values):
     return ['' if v is None else 'timing-low' if v == min(valid) else 'timing-high' if v == max(valid) else 'timing-middle' for v in values]
 
 
-def duration_plot(title, rows, scope, comparison_groups=None, bold_indices=(), canonical_candidates=None):
+def duration_plot(title, rows, scope, comparison_groups=None, bold_indices=(), canonical_candidates=None, comparison_reference="Fundsp", reference_label="FunDSP", inventory=False):
     """Rows are (label, retained integer ns); empty observations remain gaps."""
     medians = [sorted(values)[(len(values)-1)//2] if values else None for _, values in rows]
     groups = comparison_groups if comparison_groups is not None else [0] * len(rows)
@@ -69,11 +76,13 @@ def duration_plot(title, rows, scope, comparison_groups=None, bold_indices=(), c
             ranks[i] = rank
     notes = None
     relative_note = ''
-    if canonical_candidates is not None:
-        ranks, notes = canonical_comparison(canonical_candidates, medians)
+    if inventory:
+        ranks = ["timing-reference" if c == "Direct" else "" for c in canonical_candidates]
+    elif canonical_candidates is not None:
+        ranks, notes = canonical_comparison(canonical_candidates, medians, comparison_reference)
         canonical = dict(zip(canonical_candidates, medians))
-        delta, percent, ratio = relative_to_fundsp(canonical.get('Offline'), canonical.get('Fundsp'))
-        relative_note = f' Ours vs FunDSP: {delta} time; {percent} time (FunDSP denominator); ours/FunDSP time ratio {ratio}.'
+        delta, percent, ratio = relative_to_reference(canonical.get('Offline'), canonical.get(comparison_reference), reference_label)
+        relative_note = f' Ours vs {reference_label}: {delta} time; {percent} time ({reference_label} denominator); ours/reference time ratio {ratio}.'
     maximum = max((v / 1e6 for _, values in rows for v in values), default=0) or 1
     maximum *= 1.08
     height = 90 + 76 * len(rows)
@@ -101,7 +110,7 @@ def duration_plot(title, rows, scope, comparison_groups=None, bold_indices=(), c
         if notes is not None:
             parts.append(f'<text x="810" y="{y+22}">{esc(notes[i])}</text>')
         parts.append('</g>')
-    parts.append(f'<text x="540" y="{height-5}" text-anchor="middle">Complete workload elapsed time (ms) · zero origin</text></svg><figcaption>Dots: retained trials; dark tick: lower-middle median; bar: zero to median. Shared scale within this workload comparison. {"Percentages compare only ours and FunDSP against their faster eligible median. " if canonical_candidates is not None else ""}{esc(scope)}{esc(relative_note)}</figcaption></figure>')
+    parts.append(f'<text x="540" y="{height-5}" text-anchor="middle">Complete workload elapsed time (ms) · zero origin</text></svg><figcaption>Dots: retained trials; dark tick: lower-middle median; bar: zero to median. Shared scale within this workload comparison. {"Color percentages use the faster eligible median within this pair. " if canonical_candidates is not None and not inventory else ""}{esc(scope)}{esc(relative_note)}</figcaption></figure>')
     return ''.join(parts)
 
 

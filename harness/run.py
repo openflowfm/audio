@@ -15,12 +15,14 @@ import tempfile
 import time
 
 from report import read_study
+from candidates import NAMES, SCOPES, CLI_CANDIDATES, RESOURCE_COLORS, present_candidates, LITERAL_KEYS, literals_pass
+from reference_report import canonical_views
 from dispatch_report import read_experiment, summaries as dispatch_summaries, strategies as dispatch_strategies
 from impact_charts import duration_plot, paired_plot, phase_plot, duration_ranks, RANK_STYLE, RANK_NOTE, canonical_comparison, relative_to_fundsp
 
 REPO = Path(__file__).resolve().parent.parent
-PROFILE_PAIRS = [(w, c) for w in ('loop-32', 'bursts-16-dense') for c in ('offline', 'direct', 'fundsp')]
-CANDIDATES = {'offline': 'Offline', 'direct': 'Direct', 'fundsp': 'Fundsp'}
+PROFILE_PAIRS = [(w, c) for w in ('loop-32', 'bursts-16-dense') for c in CLI_CANDIDATES]
+CANDIDATES = CLI_CANDIDATES
 
 
 def save(path, data):
@@ -63,12 +65,12 @@ def only_child(root, prefix):
 
 def study_evidence(root):
     directory = only_child(root, 'audio-harness-')
-    manifest, gates, _, trials, aggregates = read_study(directory)
+    manifest, gates, workloads, trials, aggregates = read_study(directory)
     failed = (any(c['outcome'] == 'fail' for c in gates['checks']) or
-              any(not g['passed'] for g in gates['literal_offline']) or
-              any(c['outcome'] != 'pass' for key in ('first_direct', 'first_fundsp') for c in gates[key]['cases']) or
+              any(not literals_pass(gates,c) for c in present_candidates(aggregates) if c not in ('FundspBlock','Oddio')) or
               bool(gates['execution_errors']) or any(t['conformance'] != 'pass' for t in trials))
     return directory, {'gates': gates, 'aggregates': aggregates, 'trials': len(trials),
+                       'workloads': workloads, 'native_gate_requirements': manifest.get('native_gate_requirements', []),
                        'timing_scope': manifest['timing_scope'], 'preparation_scope': manifest['preparation_scope'],
                        'render_strategy': manifest.get('render_strategy'), 'enqueue_strategy': manifest.get('enqueue_strategy')}, failed
 
@@ -77,12 +79,23 @@ def profile_evidence(root):
     directory = only_child(root, 'audio-profile-')
     gates = json.loads((directory / 'gates.json').read_text())
     process = json.loads((directory / 'process.json').read_text())
+    selected = {c.get('candidate') for c in gates['checks']}
+    native = [c for c in selected if c in ('FundspBlock','Oddio')]
+    if native and 'required_native_gate_ids' not in gates:
+        raise ValueError('missing native profile gate requirements')
+    required_ids = gates.get('required_native_gate_ids', [])
+    native_pass = all(literals_pass(gates,c,required_ids) for c in native)
+    native_gap = bool(native) and required_ids==[] and bool(gates['checks']) and all(c['outcome']=='capability_gap' for c in gates['checks'])
+    other_gates_pass = (bool(gates['literal']) and all(g['passed'] for g in gates['literal']) and
+                        all(bool(gates[k]['cases']) and all(c['outcome']=='pass' for c in gates[k]['cases']) for k in ('direct','fundsp')) and
+                        (native_pass or native_gap))
     if not gates['passed']:
-        gap = (all(g['passed'] for g in gates['literal']) and
-               all(c['outcome'] == 'pass' for k in ('direct', 'fundsp') for c in gates[k]['cases']) and
+        gap = (other_gates_pass and
                bool(gates['checks']) and all(c['outcome'] in ('pass', 'capability_gap') for c in gates['checks']) and
                any(c['outcome'] == 'capability_gap' for c in gates['checks']))
         return directory, {'gates': gates, 'process': process}, 'capability_gap' if gap else 'failed'
+    if not other_gates_pass or not native_pass or not gates['checks'] or any(c['outcome']!='pass' for c in gates['checks']):
+        raise ValueError('profile claimed passing without passing correctness gates')
     marker = json.loads((directory / 'profile-complete.json').read_text())
     required = {'profile.json', 'process.json', 'gates.json', 'artifact-writes.json'}
     if marker['kind'] != 'instrumented-profile' or not required.issubset(marker['sha256']):
@@ -141,15 +154,15 @@ def sample_points(samples, field, scale=1, rate=False):
 
 
 def time_chart(title, unit, series, note):
-    names = {'Offline': 'audio[flow] MVP (ours)', 'Direct': 'Direct reference', 'Fundsp': 'FunDSP reference'}
-    colors = {'Offline': '#426f9d', 'Direct': '#777777', 'Fundsp': '#94724e'}
+    names = NAMES
+    colors = RESOURCE_COLORS
     esc = lambda v: html.escape(str(v))
     actual = [(t, v) for _, points in series for t, v in points if v is not None]
     if not actual:
         return '<figure><h4>'+esc(title)+'</h4><p>Unavailable: insufficient valid timestamped observations.</p><figcaption>'+esc(note)+'</figcaption></figure>'
     xmax = max(t for t, _ in actual) or 1
     ymax = max(v for _, v in actual) or 1
-    svg = [f'<svg viewBox="0 0 740 390" role="img" aria-label="{esc(title)}"><title>{esc(title)} — real elapsed-time samples</title>']
+    svg = [f'<svg viewBox="0 0 740 {max(390, 352+18*len(series))}" role="img" aria-label="{esc(title)}"><title>{esc(title)} — real elapsed-time samples</title>']
     for step in range(5):
         x = 65 + step / 4 * 605
         y = 275 - step / 4 * 230
@@ -177,8 +190,8 @@ def time_chart(title, unit, series, note):
 
 def resource_chart(title, unit, groups, note):
     """Grouped bars for actual aggregates; None remains unavailable, never zero."""
-    names = {'Offline': 'audio[flow] MVP (ours)', 'Direct': 'Direct reference', 'Fundsp': 'FunDSP reference'}
-    colors = {'Offline': '#426f9d', 'Direct': '#777777', 'Fundsp': '#94724e'}
+    names = NAMES
+    colors = RESOURCE_COLORS
     esc = lambda v: html.escape(str(v))
     values = [v for _, rows in groups for _, v in rows if v is not None]
     maximum = max(values, default=0) or 1
@@ -205,7 +218,7 @@ def report(directory):
     """Neutral per-workload data presentation, derived only from retained evidence."""
     data = json.loads((directory / 'run.json').read_text())
     esc = lambda v: html.escape(str(v))
-    names = {'Offline': 'audio[flow] MVP (ours)', 'Direct': 'Direct reference', 'Fundsp': 'FunDSP reference'}
+    names = NAMES
     stages = data['stages']
     study = next((s.get('evidence') for s in stages if s['name'] == 'study'), None)
     experiment = next((s.get('evidence') for s in stages if s['name'] == 'dispatch-experiment'), None)
@@ -219,9 +232,11 @@ def report(directory):
         elif e['gates']['checks']:
             c = e['gates']['checks'][0]
             profile_map[(c['workload'], c['candidate'])] = stage
+    inventory = present_candidates(study['aggregates'] if study else [], [c for _,c in profile_map] + ['Offline','Direct','Fundsp'])
+    names = {c:NAMES[c] for c in inventory}
     workloads = list(dict.fromkeys(([a['workload'] for a in study['aggregates']] if study else []) + ([w['id'] for w in experiment['workloads']] if experiment else []) + [key[0] for key in profile_map]))
     sections = ['<header><p class="eyebrow">audio[flow] · local measurements</p><h1>Workload statistics</h1><p>Uninstrumented rendering durations and separate diagnostic resource profiles, grouped by workload.</p></header>',
-        '<div class="legend"><span class="ours">audio[flow] MVP (ours)<small>Graph, RAM players, gain/sum and timed command batches</small></span><span>Direct reference<small>Purpose-built implementation of this workload.</small></span><span>FunDSP reference<small>WavePlayer + gain; adapter scheduling, sum and positions</small></span></div>',
+        '<div class="legend">'+''.join('<span class="'+('ours' if c=='Offline' else '')+'">'+esc(names[c])+'<small>'+esc(SCOPES[c])+'</small></span>' for c in names)+'</div>',
         f'<p>Verification run status: <strong>{esc(data["status"])}</strong>. This records correctness/execution status, not comparative performance.</p>',
         '<p class="note">'+RANK_NOTE+'</p>',
         '<nav aria-label="Workloads">'+''.join(f'<a href="#workload-{i}">{esc(w)}</a>' for i, w in enumerate(workloads))+'</nav>']
@@ -232,21 +247,7 @@ def report(directory):
         selected = [a for a in study['aggregates'] if a['workload'] == workload] if study else []
         if selected:
             sections.append('<p>Canonical audio[flow] selection: '+esc(study.get('render_strategy') or 'not recorded in retained manifest')+' / '+esc(study.get('enqueue_strategy') or 'enqueue selection not recorded')+'.</p>')
-            rows, chart = [], []
-            for candidate in names:
-                a = next((a for a in selected if a['candidate'] == candidate), None)
-                checks = [c for c in study['gates']['checks'] if c['workload'] == workload and c['candidate'] == candidate]
-                status = 'Eligible' if a and a['eligible'] else ('Capability gap' if checks and all(c['outcome'] == 'capability_gap' for c in checks) else 'Ineligible / unavailable')
-                values = [f'{a[k]/1e6:.4f}' if a and a['eligible'] and a[k] is not None else '—' for k in ('median_ns', 'min_ns', 'max_ns')]
-                rows.append((names[candidate], status, a['repeats'] if a else 0, *values))
-                chart.append((candidate, a['median_ns']/1e6 if a and a['eligible'] and a['median_ns'] is not None else None))
-            ranks, comparison_notes = canonical_comparison(list(names), [next((a['median_ns'] for a in selected if a['candidate'] == c and a['eligible']), None) for c in names])
-            canonical_medians = {a['candidate']: a['median_ns'] for a in selected if a['eligible']}
-            relative = relative_to_fundsp(canonical_medians.get('Offline'), canonical_medians.get('Fundsp'))
-            rows = [(*row, note, *(relative if candidate == 'Offline' else ('—',)*3)) for (candidate, row), note in zip(zip(names, rows), comparison_notes)]
-            sections += ['<p>Milliseconds per complete workload; lower duration means less elapsed time. Three warmups, twelve retained repeats per supported candidate; median is the lower middle observation.</p>',
-                table(['Candidate', 'Gate / eligibility', 'Retained trials', 'Median ms', 'Min ms', 'Max ms', 'Vs faster (ours / FunDSP)', 'Ours vs FunDSP: time difference', 'Ours vs FunDSP: % time (÷ FunDSP)', 'Ours / FunDSP time ratio'], rows, [rank + (' ours-row' if c == 'Offline' else '') for (c, _), rank in zip(chart, ranks)]).replace('<table>', '<table class="candidate-table">', 1),
-                duration_plot('Absolute end-to-end duration — ours and references', [(names[c], next((a['durations_ns'] for a in selected if a['candidate'] == c and a['eligible']), [])) for c in names], 'Timed: '+study['timing_scope']+'. Preparation excluded: '+study['preparation_scope']+'.', bold_indices=(0,), canonical_candidates=list(names)),
+            sections += [canonical_views(selected,[c for c in study['gates']['checks'] if c['workload']==workload],study['timing_scope'],study['preparation_scope'],list(names), study.get('gates'), study.get('native_gate_requirements', [])),
                 '<details><summary>Timing boundaries and raw repeats</summary>',
                 f'<p>Timed: {esc(study["timing_scope"])}. Preparation: {esc(study["preparation_scope"])}.</p>',
                 table(['Candidate', 'Retained integer durations (ns)', 'Preparation durations (ns)'], [(names[a['candidate']], ', '.join(map(str, a['durations_ns'])), ', '.join(map(str, a['preparation_ns']))) for a in selected]), '</details>']
@@ -361,7 +362,7 @@ def report(directory):
         if 'artifact_dir' in stage:
             sections.append(f'<p>{esc(stage["name"])}: <a href="{esc(stage["artifact_dir"])}/">Retained artifacts</a></p>')
     sections += ['</details></section>']
-    style = 'body{font:16px/1.55 system-ui;background:#f5f7fa;color:#17243a;margin:0}main{max-width:1280px;margin:auto;padding:36px 24px}h1{font-size:38px;margin:8px 0}h2{margin:0 0 14px;font-size:28px}h3{margin-top:28px}h4{margin:0 0 12px}.eyebrow{color:#40627b;text-transform:uppercase;font-size:12px;letter-spacing:.12em}section{margin-top:28px;background:white;border:1px solid #dce4e9;border-radius:12px;padding:24px}.legend{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.legend>span{padding:18px;background:#edf2f7;border-radius:8px}.legend .ours{font-weight:650}.legend small{display:block;font-size:13px;color:#4f6271}table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:12px 10px;border-bottom:1px solid #dbe1ea;text-align:left;font-variant-numeric:tabular-nums}th{background:#edf2f7}.scroll{overflow:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#edf2f7;padding:16px;font-size:12px}details{margin:16px 0;border-top:1px solid #e1e7ed;padding-top:14px}summary{cursor:pointer;font-weight:600}a{color:#1459ad}nav{display:flex;flex-wrap:wrap;gap:12px;margin:24px 0}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}figure{margin:18px 0;padding:16px;background:#f6f8fa;border-radius:8px;overflow:auto}figure svg{width:100%;min-width:520px;display:block;font:13px system-ui;fill:#17243a}figcaption,.note{font-size:13px;color:#4f6271}@media(max-width:850px){.legend,.charts{grid-template-columns:1fr}main{padding:20px 12px}section{padding:16px}h1{font-size:29px}}'
+    style = 'body{font:16px/1.55 system-ui;background:#f5f7fa;color:#17243a;margin:0}main{max-width:1280px;margin:auto;padding:36px 24px}h1{font-size:38px;margin:8px 0}h2{margin:0 0 14px;font-size:28px}h3{margin-top:28px}h4{margin:0 0 12px}.eyebrow{color:#40627b;text-transform:uppercase;font-size:12px;letter-spacing:.12em}section{margin-top:28px;background:white;border:1px solid #dce4e9;border-radius:12px;padding:24px}.legend{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px}.legend>span{padding:18px;background:#edf2f7;border-radius:8px}.legend .ours{font-weight:650}.legend small{display:block;font-size:13px;color:#4f6271}table{border-collapse:collapse;width:100%;font-size:14px}th,td{padding:12px 10px;border-bottom:1px solid #dbe1ea;text-align:left;font-variant-numeric:tabular-nums}th{background:#edf2f7}.scroll{overflow:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#edf2f7;padding:16px;font-size:12px}details{margin:16px 0;border-top:1px solid #e1e7ed;padding-top:14px}summary{cursor:pointer;font-weight:600}a{color:#1459ad}nav{display:flex;flex-wrap:wrap;gap:12px;margin:24px 0}.charts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}figure{margin:18px 0;padding:16px;background:#f6f8fa;border-radius:8px;overflow:auto}figure svg{width:100%;min-width:520px;display:block;font:13px system-ui;fill:#17243a}figcaption,.note{font-size:13px;color:#4f6271}@media(max-width:850px){.legend,.charts{grid-template-columns:1fr}main{padding:20px 12px}section{padding:16px}h1{font-size:29px}}'
     style += RANK_STYLE
     document = '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>audio[flow] — workload statistics</title><style>'+style+'</style><main>'+''.join(sections)+'</main></html>'
     (directory / 'report.html').write_text(document)

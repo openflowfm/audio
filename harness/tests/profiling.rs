@@ -6,6 +6,9 @@ use std::{
 fn profiles_preserve_gates_and_stay_out_of_speed_evidence() {
     for (candidate, workload, eligible) in [
         ("offline", "one-shot", true),
+        ("fundsp-block", "loop-1", true),
+        ("oddio", "loop-1", true),
+        ("oddio", "one-shot", false),
         ("direct", "loop-1", true),
         ("fundsp", "loop-1", true),
         ("offline", "bursts-16-dense", true),

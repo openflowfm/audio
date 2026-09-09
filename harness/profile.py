@@ -17,7 +17,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output-root', type=Path, required=True)
     parser.add_argument('--workload', default='loop-32')
-    parser.add_argument('--candidate', choices=['offline', 'direct', 'fundsp'], default='offline')
+    parser.add_argument('--candidate', choices=['offline', 'direct', 'fundsp', 'fundsp-block', 'oddio'], default='offline')
     parser.add_argument('--repeats', type=int, default=100000)
     parser.add_argument('--seconds', type=int, default=5)
     parser.add_argument('--enqueue', choices=['scan', 'counted'], default='scan')

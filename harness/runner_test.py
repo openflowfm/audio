@@ -78,10 +78,27 @@ class RunnerTests(unittest.TestCase):
             run.save(child / 'gates.json', gates)
             self.assertEqual(run.profile_evidence(root)[2], 'failed')
             gates['passed'] = True
+            gates['literal'][0]['passed'] = True
+            gates['checks'][0]['outcome'] = 'pass'
             run.save(child / 'gates.json', gates)
             run.save(child / 'profile-complete.json', {'kind': 'instrumented-profile', 'sha256': {}})
             with self.assertRaisesRegex(ValueError, 'completion'):
                 run.profile_evidence(root)
+
+    def test_native_profile_gap_cannot_hide_failed_native_literal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);child=root/'audio-profile-fixture';child.mkdir()
+            gates=dict(passed=False,literal=[{'passed':True}],direct={'cases':[{'outcome':'pass'}]},fundsp={'cases':[{'outcome':'pass'}]},oddio=[{'passed':False,'id':'native-Loop'}],required_native_gate_ids=['native-Loop'],checks=[{'candidate':'Oddio','outcome':'capability_gap'}])
+            run.save(child/'gates.json',gates);run.save(child/'process.json',{'exit_code':1})
+            self.assertEqual(run.profile_evidence(root)[2],'failed')
+            gates['oddio'][0]['passed']=True;run.save(child/'gates.json',gates)
+            self.assertEqual(run.profile_evidence(root)[2],'capability_gap')
+            gates['oddio'].append({'id':'native-Once','passed':False});run.save(child/'gates.json',gates)
+            self.assertEqual(run.profile_evidence(root)[2],'capability_gap')
+            gates['required_native_gate_ids']=[];run.save(child/'gates.json',gates)
+            self.assertEqual(run.profile_evidence(root)[2],'capability_gap')
+            gates['checks'][0]['outcome']='fail';run.save(child/'gates.json',gates)
+            self.assertEqual(run.profile_evidence(root)[2],'failed')
 
 
 if __name__ == '__main__':

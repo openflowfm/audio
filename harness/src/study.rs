@@ -246,6 +246,8 @@ pub enum Candidate {
     Offline,
     Direct,
     Fundsp,
+    FundspBlock,
+    Oddio,
 }
 impl Candidate {
     pub fn name(self) -> &'static str {
@@ -253,12 +255,16 @@ impl Candidate {
             Self::Offline => "offline-mvp",
             Self::Direct => "direct-loop",
             Self::Fundsp => "fundsp-0.20.0",
+            Self::FundspBlock => "fundsp-0.20.0-block",
+            Self::Oddio => "oddio-0.7.4",
         }
     }
     pub fn scope(self) -> &'static str {
         match self {
             Self::Offline => "native graph, command batches and observable state",
             Self::Direct => "specialized flat player/gain/sum; adapter scheduled starts",
+            Self::FundspBlock => "native static WavePlayer/gain composition via process blocks up to64; adapter starts, positions and ordered sum",
+            Self::Oddio => "native Cycle/FramesSignal + initialized Gain + Mixer/run; adapter starts and positions; reverse insertion preserves declared sum order",
             Self::Fundsp => {
                 "native WavePlayer + gain; adapter scheduled starts, position tracking and sum"
             }
@@ -281,6 +287,7 @@ pub struct Bank {
 pub enum Prepared {
     Offline(RenderState),
     Bank(Bank),
+    Native(crate::native_reference::NativeBank),
 }
 impl Prepared {
     pub fn new(workload: &Workload, candidate: Candidate) -> Result<Self, String> {
@@ -314,6 +321,14 @@ impl Prepared {
                 strategy,
                 enqueue_strategy,
             )));
+        }
+        if candidate == Candidate::Oddio && workload.mode == Mode::Once {
+            return Err("capability gap: Oddio 0.7.4 FramesSignal partition-dependent interpolation is incompatible with bitwise exact-copy one-shot playback; unrestricted native failures are retained in native_diagnostics".into());
+        }
+        if matches!(candidate, Candidate::FundspBlock | Candidate::Oddio) {
+            return Ok(Self::Native(crate::native_reference::NativeBank::new(
+                workload, candidate,
+            )?));
         }
         if workload.mode == Mode::Bursts {
             return Err("capability gap: timed stop/seek batches are not implemented by this reference adapter".into());
@@ -363,6 +378,7 @@ impl Prepared {
     }
     pub fn enqueue(&mut self, batches: Vec<Batch>) -> Result<(), String> {
         match self {
+            Self::Native(bank) => return bank.enqueue(batches),
             Self::Offline(state) => {
                 for batch in batches {
                     state.enqueue(batch).map_err(|e| format!("{e:?}"))?;
@@ -391,6 +407,7 @@ impl Prepared {
     }
     pub fn render_into(&mut self, output: &mut [Vec<f32>]) -> Result<(), String> {
         match self {
+            Self::Native(bank) => bank.render_into(output),
             Self::Offline(state) => state.render_into(output).map_err(|e| format!("{e:?}")),
             Self::Bank(bank) => {
                 if output.len() != 1 || output[0].len() > 4096 {
@@ -433,6 +450,7 @@ impl Prepared {
     }
     pub fn observe(&self) -> Observation {
         match self {
+            Self::Native(bank) => bank.observe(),
             Self::Offline(state) => state.observe(),
             Self::Bank(bank) => Observation {
                 output_frame: bank.frame as u64,
@@ -493,6 +511,34 @@ pub fn check_with_strategies(
     strategy: RenderStrategy,
     enqueue_strategy: EnqueueStrategy,
 ) -> Check {
+    check_inner(
+        workload,
+        candidate,
+        block,
+        strategy,
+        enqueue_strategy,
+        false,
+    )
+}
+/// Diagnostic-only native admission bypass. This never supplies timing evidence.
+pub fn diagnose_oddio_once(workload: &Workload, block: usize) -> Check {
+    check_inner(
+        workload,
+        Candidate::Oddio,
+        block,
+        RenderStrategy::default(),
+        EnqueueStrategy::default(),
+        true,
+    )
+}
+fn check_inner(
+    workload: &Workload,
+    candidate: Candidate,
+    block: usize,
+    strategy: RenderStrategy,
+    enqueue_strategy: EnqueueStrategy,
+    diagnostic: bool,
+) -> Check {
     let mut result = Check {
         workload: workload.id.clone(),
         candidate,
@@ -523,7 +569,11 @@ pub fn check_with_strategies(
         return result;
     }
     let mut adapter =
-        match Prepared::new_with_strategies(workload, candidate, strategy, enqueue_strategy) {
+        match if diagnostic && candidate == Candidate::Oddio && workload.mode == Mode::Once {
+            crate::native_reference::NativeBank::new(workload, candidate).map(Prepared::Native)
+        } else {
+            Prepared::new_with_strategies(workload, candidate, strategy, enqueue_strategy)
+        } {
             Ok(adapter) => adapter,
             Err(error) => {
                 result.outcome = if error.starts_with("capability gap") {
@@ -766,8 +816,16 @@ pub fn run(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     first_external.adapter = "fundsp-0.20.0".into();
     first_external.scheduling = "adapter-emulated; position adapter-tracked".into();
     let literal_gates = crate::contracts::verify(RenderState::new);
+    let fundsp_block = crate::native_reference::gates(Candidate::FundspBlock);
+    let oddio = crate::native_reference::gates(Candidate::Oddio);
     let workloads = workloads();
-    let candidates = [Candidate::Offline, Candidate::Direct, Candidate::Fundsp];
+    let candidates = [
+        Candidate::Offline,
+        Candidate::Direct,
+        Candidate::Fundsp,
+        Candidate::FundspBlock,
+        Candidate::Oddio,
+    ];
     let mut checks = vec![];
     for workload in &workloads {
         for candidate in candidates {
@@ -776,15 +834,28 @@ pub fn run(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
             }
         }
     }
+    let native_diagnostics: Vec<_> = workloads
+        .iter()
+        .filter(|w| w.mode == Mode::Once)
+        .flat_map(|w| {
+            [1, 64, 257]
+                .into_iter()
+                .map(move |b| diagnose_oddio_once(w, b))
+        })
+        .collect();
     let mut trials = vec![];
     let mut execution_errors = vec![];
     let mut order = 0;
     for workload in &workloads {
         for round in 0..15 {
             // Three warmups; twelve retained repetitions, rotating candidate order.
-            for index in 0..3 {
-                let candidate = candidates[(index + round) % 3];
+            for index in 0..candidates.len() {
+                let candidate = candidates[(index + round) % candidates.len()];
                 let literal_pass = match candidate {
+                    Candidate::FundspBlock => {
+                        crate::native_reference::mode_passes(&fundsp_block, workload.mode)
+                    }
+                    Candidate::Oddio => crate::native_reference::mode_passes(&oddio, workload.mode),
                     Candidate::Offline => literal_gates.iter().all(|g| g.passed),
                     Candidate::Direct => {
                         first_direct.outcome() == crate::conformance::Outcome::Pass
@@ -811,10 +882,18 @@ pub fn run(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let mut summaries = vec![];
     for workload in &workloads {
         for candidate in candidates {
-            let eligible = checks
-                .iter()
-                .filter(|c| c.workload == workload.id && c.candidate == candidate)
-                .all(|c| c.outcome == "pass")
+            let native_literal_pass = match candidate {
+                Candidate::FundspBlock => {
+                    crate::native_reference::mode_passes(&fundsp_block, workload.mode)
+                }
+                Candidate::Oddio => crate::native_reference::mode_passes(&oddio, workload.mode),
+                _ => true,
+            };
+            let eligible = native_literal_pass
+                && checks
+                    .iter()
+                    .filter(|c| c.workload == workload.id && c.candidate == candidate)
+                    .all(|c| c.outcome == "pass")
                 && !execution_errors.iter().any(|e| {
                     e["workload"] == workload.id
                         && e["candidate"] == serde_json::to_value(candidate).unwrap()
@@ -822,7 +901,8 @@ pub fn run(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
             summaries.push(aggregate(&workload.id, candidate, &trials, eligible)?);
         }
     }
-    let manifest = serde_json::json!({"schema_version":1,"kind":"offline-study","render_strategy":RenderStrategy::default(),"enqueue_strategy":EnqueueStrategy::default(),"render_fallback":"Generic for unsupported graph shapes; all current study workloads support FlatFused","revision_at_run":results::command_text("git",&["rev-parse","HEAD"]),
+    let native_gate_requirements:Vec<_>=[Candidate::FundspBlock,Candidate::Oddio].into_iter().flat_map(|candidate|workloads.iter().map(move |w|serde_json::json!({"candidate":candidate,"workload":w.id,"gate_ids":crate::native_reference::required_gate_ids(candidate,w.mode)}))).collect();
+    let manifest = serde_json::json!({"schema_version":1,"kind":"offline-study","candidates":candidates,"native_gate_requirements":native_gate_requirements,"native_capability_limitations":[{"candidate":"Oddio","mode":"Once","reason":"Pinned FramesSignal interpolation cannot satisfy partition-invariant bitwise exact-copy playback","evidence":"conformance.json native_diagnostics and oddio native-Once literal gates"}],"native_literal_gate_scope":"Gate id native-Once or native-Loop matches workload mode; all matching partitions must pass; Bursts unsupported","render_strategy":RenderStrategy::default(),"enqueue_strategy":EnqueueStrategy::default(),"render_fallback":"Generic for unsupported graph shapes; all current study workloads support FlatFused","revision_at_run":results::command_text("git",&["rev-parse","HEAD"]),
         "dirty_status_at_run":results::command_text("git",&["status","--porcelain"]),"compiler":env!("HARNESS_RUSTC"),"profile":env!("HARNESS_PROFILE"),"opt_level":env!("HARNESS_OPT_LEVEL"),"target":env!("HARNESS_TARGET"),"encoded_rustflags":env!("HARNESS_CARGO_ENCODED_RUSTFLAGS"),
         "hardware":results::command_text("sysctl",&["-n","machdep.cpu.brand_string"]),"os":results::command_text("uname",&["-sr"]),"dependency_lock":include_str!("../Cargo.lock"),"sample_rate":48000,"channels":1,"sample_format":"f32","quality":"exact-copy and fixed ordered f32 gain/sum; no smoothing",
         "warmups":3,"repeats":12,"ordering":"per-workload rotating candidate order each round; deterministic","timing_source":"Instant monotonic","timing_block":256,"conformance_blocks":[1,64,257],"limits":Limits::default(),
@@ -853,7 +933,7 @@ pub fn run(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
             (
                 "conformance.json".into(),
                 json_bytes(
-                    &serde_json::json!({"schema_version":1,"checks":checks,"execution_errors":execution_errors,"literal_offline":literal_gates,"first_direct":first_direct,"first_fundsp":first_external}),
+                    &serde_json::json!({"schema_version":1,"checks":checks,"execution_errors":execution_errors,"literal_offline":literal_gates,"first_direct":first_direct,"first_fundsp":first_external,"fundsp_block":fundsp_block,"oddio":oddio,"native_diagnostics":native_diagnostics,"native_diagnostics_scope":"Unrestricted native Oddio Once output; failed PCM retained; never eligible for timing"}),
                 )?,
             ),
             ("timings.jsonl".into(), raw),

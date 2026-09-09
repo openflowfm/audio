@@ -199,7 +199,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
     if !(6..=8).contains(&args.len()) {
         return Err(
-            "usage: audio-profile RUN_DIRECTORY WORKLOAD offline|direct|fundsp REPEATS SECONDS [generic|flat-fused] [scan|counted]"
+            "usage: audio-profile RUN_DIRECTORY WORKLOAD offline|direct|fundsp|fundsp-block|oddio REPEATS SECONDS [generic|flat-fused] [scan|counted]"
                 .into(),
         );
     }
@@ -230,6 +230,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         "offline" => Candidate::Offline,
         "direct" => Candidate::Direct,
         "fundsp" => Candidate::Fundsp,
+        "fundsp-block" => Candidate::FundspBlock,
+        "oddio" => Candidate::Oddio,
         _ => return Err("unknown candidate".into()),
     };
     let repeats: usize = args[4].parse()?;
@@ -243,18 +245,45 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     });
     let direct = conformance::run_suite(&fixture, reference::DirectLoop::default);
     let fundsp = conformance::run_suite(&fixture, external::FundspCopy::default);
+    let fundsp_block = audio_flow_harness::native_reference::gates(Candidate::FundspBlock);
+    let oddio = audio_flow_harness::native_reference::gates(Candidate::Oddio);
+    let required_native_gate_ids = if matches!(candidate, Candidate::FundspBlock | Candidate::Oddio)
+    {
+        audio_flow_harness::native_reference::required_gate_ids(candidate, workload.mode)
+    } else {
+        vec![]
+    };
+    let native_diagnostics: Vec<_> = if candidate == Candidate::Oddio && workload.mode == Mode::Once
+    {
+        [1, 64, 257]
+            .into_iter()
+            .map(|b| diagnose_oddio_once(&workload, b))
+            .collect()
+    } else {
+        vec![]
+    };
+    let selected_native_pass = match candidate {
+        Candidate::FundspBlock => {
+            audio_flow_harness::native_reference::mode_passes(&fundsp_block, workload.mode)
+        }
+        Candidate::Oddio => {
+            audio_flow_harness::native_reference::mode_passes(&oddio, workload.mode)
+        }
+        _ => true,
+    };
     let checks: Vec<_> = [1, 64, 257]
         .into_iter()
         .map(|b| check_with_strategies(&workload, candidate, b, strategy, enqueue_strategy))
         .collect();
-    let passed = literal.iter().all(|g| g.passed)
+    let passed = selected_native_pass
+        && literal.iter().all(|g| g.passed)
         && direct.outcome() == conformance::Outcome::Pass
         && fundsp.outcome() == conformance::Outcome::Pass
         && checks.iter().all(|c| c.outcome == "pass");
     write_new(
         dir.join("gates.json"),
         results::json_bytes(
-            &serde_json::json!({"literal":literal,"direct":direct,"fundsp":fundsp,"checks":checks,"passed":passed}),
+            &serde_json::json!({"literal":literal,"direct":direct,"fundsp":fundsp,"fundsp_block":fundsp_block,"oddio":oddio,"required_native_gate_ids":required_native_gate_ids,"native_diagnostics":native_diagnostics,"checks":checks,"passed":passed}),
         )?,
     )?;
     if !passed {
