@@ -1,10 +1,14 @@
 # Architecture
 
-This is the proposed contract, not an implemented API. Names below describe roles;
-they do not prescribe a crate layout. Eventual integration is a thin native Node
+This is the longer-term architecture. The implemented subset is governed by the
+[offline contract](offline-contract.md): immutable RAM assets, pure graph compilation,
+a Program and independent mutable render states. Production crate/API boundaries
+remain open. Eventual integration is a thin native Node
 binding and an `@openflow/audio` TypeScript API in the same repository as the Rust
-core, not a separate server process. Engine implementation is paused for the
-[comparison harness](harness-decisions.md); dependency choices remain unvalidated.
+core, not a separate server process. The [comparison harness](harness-decisions.md)
+evaluates the offline subset; production dependency choices remain unvalidated.
+The sections below also describe future program replacement, processing and host
+contracts that the current offline implementation does not yet provide.
 
 ```text
 editable Graph -> validate and prepare -> Program -> stateful rendering

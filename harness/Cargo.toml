@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 publish = false
+default-run = "audio-flow-harness"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
 
 [dependencies]
 serde = { version = "=1.0.228", features = ["derive"] }

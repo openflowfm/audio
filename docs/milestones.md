@@ -1,12 +1,10 @@
 # Milestones
 
-These are incremental proofs for the planned engine. None is implemented here.
-Implementation is paused until the [comparison harness](harness-decisions.md) supplies
-evidence for reuse or specialization per workload. Its first slice is narrower than
-stage 1 below; these engine stages remain future intentions, not harness requirements. Each
-uses the same Graph-to-Program and stateful rendering contracts; the offline renderer
-must not become a separate DSP implementation. Track executable work in project
-issues; this document defines what each stage needs to demonstrate.
+These are incremental proofs for the reusable engine. Stage 1 has a local offline
+MVP and [comparison harness](harness-decisions.md); the remaining stages are future
+work. The offline module provides the reusable rendering implementation, not a
+separate DSP copy of a device engine. Native output and production integration have
+not been implemented or authorized by this local evaluation.
 
 | stage | scope | evidence required before proceeding |
 |---|---|---|
@@ -16,7 +14,9 @@ issues; this document defines what each stage needs to demonstrate.
 | 4. One synced deck | Beat maps and stretch, following a supplied musical timeline | Measure source/output alignment, preparation and processing latency, tempo changes and native/stretched transitions; preserve independent source offsets across sample rates |
 | 5. Current mix coverage | Four decks; channel/master processing, both effect returns and retained tails, master/Phones, local timing authority and Link | Exercise the current Play behavior specification, including loop-only Slip, queued-operation cancellation and replacement; measure worst-case callback and memory costs, and validate real hardware routing and Link peers |
 
-Stage 1 is a useful initial core, and stage 2 establishes that native rendering is
+Stage 1 is exercised by independent literal/fault tests, seeded partitions, explicit
+resource/rejection checks and offline measurements. It has no realtime proof.
+Stage 2 must establish that native rendering is
 independent of the UI. Neither is a replacement for today's mix engine. Stage 5 is the
 parity gate, governed by [current Play behavior](../../../better-session-view/mix/docs/play-view.md) and its
 [behavior specification](../../../better-session-view/mix/docs/behavior-specification.md), not just by a count

@@ -1,42 +1,54 @@
 # Harness decisions
 
-Engine implementation is paused for evidence-first evaluation. The question is which
-workloads should reuse a candidate, specialize it, or own a minimal subset—not which
-library wins a universal speed ranking. No dependency selection is validated yet.
+A local offline MVP and comparison harness are implemented. Evidence still guides
+whether each workload should reuse a candidate, specialize it, or own a minimal
+subset. The FunDSP reference is not a production dependency decision; native output,
+application integration, streaming and stretching remain outside this pass.
 
-## Workflow and first exit
+## Verification and evidence
 
-Specify behavior, write an independent literal oracle, then implement a small
-vertical slice through the baseline and one adapter. Candidate agreement alone is
-not correctness. Introduce targeted faults to prove assertions notice a frame offset
-and missing end silence in the first slice. When seek and loop contracts arrive,
-also check that tests catch a dropped seek and a wrong loop endpoint.
+The first slice has a hand-written ten-frame oracle, a direct-copy baseline and a
+pinned external adapter. Offline start/stop/seek/loop/cancellation slices have their
+own literal PCM and state expectations. Seeded tests use an independent closed-form
+source-position oracle rather than candidate agreement. The reference implementation
+and oracle do not share a playback state machine.
 
-The first slice exits with the [literal oracle](harness-contract.md), a minimal
-direct-loop baseline, one external adapter and an honest conformance/capability
-outcome. A documented unsupported capability is useful evidence; exit does not
-require invented emulation to hide it. Correctness outcomes determine which scopes
-may enter [measurement](harness-measurement.md).
+[Faulty test adapters](../harness/tests/conformance.rs) must lose on shifted,
+truncated, extra, stale-after-end, non-finite and state-corrupt output. Additional
+[faults](../harness/tests/faults.rs) drop a seek, include a wrong loop endpoint,
+partially accept an invalid atomic batch or revive a stale start. Serialization,
+completion and report tests apply the same pattern to the harness itself, using
+synthetic integers and deliberately malformed evidence.
 
-A future single local/CI verify command should run deterministic contract and adapter
-checks. That command does not exist yet. Benchmark runs stay separate, with no flaky
-speed-threshold gates. Runner APIs, crate details and adaptation choices remain
-proposals to settle during implementation discussion.
+`./harness/verify` is the local/CI entry point: Rust formatting, build, deterministic
+Rust tests and Python report tests. Allocation checks are separate from timing.
+The [study command](harness-measurement.md) runs benchmarks separately, with no flaky
+speed-threshold gate. Correctness failure or a capability gap remains visible and
+excludes the pair from performance comparison.
 
-## Per-workload decision record
+## Per-workload decisions
+
+The generated report and raw artifacts are local evidence. Evaluate them with this
+record before choosing a production implementation:
 
 | field | evidence to retain |
 |---|---|
 | Question and contract | Workload, required behavior, fixture/schema version and quality settings |
-| Candidate and adapter scope | Candidate version, adapter revision, native/emulated behavior and capability gaps |
-| Correctness | Literal oracle results, errors, rejected requests and targeted fault checks |
-| Raw evidence | Run directory and manifest, conformance and trial records |
-| Costs | Preparation, memory and performance with explicit timing boundaries and variability |
-| Limitations | Unsupported behavior, host/platform coverage and unverified integration constraints |
-| Reuse decision | Reuse, specialize, own a minimal subset or defer, with reasons specific to this workload |
-| Revisit triggers | Contract changes, new candidate versions, integration findings or new measurements |
+| Candidate and adapter scope | Version, adapter revision, native/emulated behavior and capability gaps |
+| Correctness | Literal oracle, positions/errors, rejected requests and targeted fault checks |
+| Raw evidence | Run directory, manifest, conformance and trial records |
+| Costs | Preparation, memory scope and performance boundaries with observed variability |
+| Limitations | Unsupported behavior, selected API path, platform/host and integration coverage |
+| Reuse decision | Reuse, specialize, own a minimal subset or defer, with workload-specific reasons |
+| Revisit triggers | Contract changes, candidate updates, native integration or new measurements |
 
-The broader [engine milestones](milestones.md) remain future intentions. Harness
-success neither implements those stages nor proves realtime behavior or mix parity.
-Eventual integration remains a thin native Node binding and `@openflow/audio` API
-beside the Rust core, as described in [architecture](architecture.md).
+For flat playback/gain/sum, compare the specialized baseline with the selected
+FunDSP scalar path and the broader offline graph. Defer a production choice until
+block/SIMD integration and actual consumer preparation/memory needs are evaluated.
+For timed control bursts, the current reference adapters have a gap: retain the
+owned command implementation as the experimental baseline, without claiming a
+competitive result for missing adapters.
+
+The [milestones](milestones.md) distinguish the implemented offline proof from native
+reliability and mix parity. Eventual integration remains a thin native Node binding
+and `@openflow/audio` API beside the Rust core, not a separate server process.

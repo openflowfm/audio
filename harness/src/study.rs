@@ -284,6 +284,21 @@ pub enum Prepared {
 }
 impl Prepared {
     pub fn new(workload: &Workload, candidate: Candidate) -> Result<Self, String> {
+        Self::new_with_strategy(workload, candidate, RenderStrategy::default())
+    }
+    pub fn new_with_strategy(
+        workload: &Workload,
+        candidate: Candidate,
+        strategy: RenderStrategy,
+    ) -> Result<Self, String> {
+        Self::new_with_strategies(workload, candidate, strategy, EnqueueStrategy::default())
+    }
+    pub fn new_with_strategies(
+        workload: &Workload,
+        candidate: Candidate,
+        strategy: RenderStrategy,
+        enqueue_strategy: EnqueueStrategy,
+    ) -> Result<Self, String> {
         workload.validate()?;
         if candidate == Candidate::Offline {
             let mut assets = Assets::new(Limits::default()).map_err(|e| format!("{e:?}"))?;
@@ -294,7 +309,11 @@ impl Prepared {
                 .graph()
                 .compile(&assets, Limits::default())
                 .map_err(|e| format!("{e:?}"))?;
-            return Ok(Self::Offline(RenderState::new(Arc::new(program))));
+            return Ok(Self::Offline(RenderState::new_with_strategies(
+                Arc::new(program),
+                strategy,
+                enqueue_strategy,
+            )));
         }
         if workload.mode == Mode::Bursts {
             return Err("capability gap: timed stop/seek batches are not implemented by this reference adapter".into());
@@ -451,6 +470,29 @@ pub struct Check {
     pub failed_sample_bits: Option<Vec<u32>>,
 }
 pub fn check(workload: &Workload, candidate: Candidate, block: usize) -> Check {
+    check_with_strategy(workload, candidate, block, RenderStrategy::default())
+}
+pub fn check_with_strategy(
+    workload: &Workload,
+    candidate: Candidate,
+    block: usize,
+    strategy: RenderStrategy,
+) -> Check {
+    check_with_strategies(
+        workload,
+        candidate,
+        block,
+        strategy,
+        EnqueueStrategy::default(),
+    )
+}
+pub fn check_with_strategies(
+    workload: &Workload,
+    candidate: Candidate,
+    block: usize,
+    strategy: RenderStrategy,
+    enqueue_strategy: EnqueueStrategy,
+) -> Check {
     let mut result = Check {
         workload: workload.id.clone(),
         candidate,
@@ -480,19 +522,20 @@ pub fn check(workload: &Workload, candidate: Candidate, block: usize) -> Check {
         result.detail = Some("invalid external block size".into());
         return result;
     }
-    let mut adapter = match Prepared::new(workload, candidate) {
-        Ok(adapter) => adapter,
-        Err(error) => {
-            result.outcome = if error.starts_with("capability gap") {
-                "capability_gap"
-            } else {
-                "fail"
+    let mut adapter =
+        match Prepared::new_with_strategies(workload, candidate, strategy, enqueue_strategy) {
+            Ok(adapter) => adapter,
+            Err(error) => {
+                result.outcome = if error.starts_with("capability gap") {
+                    "capability_gap"
+                } else {
+                    "fail"
+                }
+                .into();
+                result.detail = Some(error);
+                return result;
             }
-            .into();
-            result.detail = Some(error);
-            return result;
-        }
-    };
+        };
     if let Err(error) = adapter.enqueue(workload.batches()) {
         result.outcome = "fail".into();
         result.detail = Some(error);
@@ -538,6 +581,34 @@ pub fn first_mismatch(expected: &[f32], actual: &[f32]) -> Option<usize> {
         })
 }
 #[derive(Debug, Serialize, Deserialize)]
+pub struct TrialFailure {
+    pub first_mismatch: Option<usize>,
+    pub expected_state: Observation,
+    pub actual_state: Observation,
+    pub actual_samples: u64,
+    pub sample_bits: Vec<u32>,
+}
+/// Validation stays outside timers; failed output remains lossless evidence.
+pub fn assess_trial_output(
+    workload: &Workload,
+    rendered: &[f32],
+    actual_state: Observation,
+) -> Option<TrialFailure> {
+    let expected_state = workload.expected_state();
+    let mismatch = first_mismatch(&workload.expected(), rendered);
+    if mismatch.is_none() && actual_state == expected_state {
+        None
+    } else {
+        Some(TrialFailure {
+            first_mismatch: mismatch,
+            expected_state,
+            actual_state,
+            actual_samples: rendered.len() as u64,
+            sample_bits: rendered.iter().map(|s| s.to_bits()).collect(),
+        })
+    }
+}
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MeasuredTrial {
     pub schema_version: u32,
     pub workload: String,
@@ -555,6 +626,8 @@ pub struct MeasuredTrial {
     pub output_buffer_bytes: u64,
     pub allocator_memory_bytes: Option<u64>,
     pub conformance: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<TrialFailure>,
 }
 fn ns(begin: Instant) -> Result<u64, String> {
     u64::try_from(begin.elapsed().as_nanos()).map_err(|e| e.to_string())
@@ -565,10 +638,37 @@ pub fn measure(
     trial: u64,
     order: u64,
 ) -> Result<MeasuredTrial, String> {
-    let expected = workload.expected();
+    measure_with_strategy(workload, candidate, trial, order, RenderStrategy::default())
+}
+pub fn measure_with_strategy(
+    workload: &Workload,
+    candidate: Candidate,
+    trial: u64,
+    order: u64,
+    strategy: RenderStrategy,
+) -> Result<MeasuredTrial, String> {
+    measure_with_strategies(
+        workload,
+        candidate,
+        trial,
+        order,
+        strategy,
+        EnqueueStrategy::default(),
+    )
+}
+pub fn measure_with_strategies(
+    workload: &Workload,
+    candidate: Candidate,
+    trial: u64,
+    order: u64,
+    strategy: RenderStrategy,
+    enqueue_strategy: EnqueueStrategy,
+) -> Result<MeasuredTrial, String> {
+    workload.validate()?;
     let batches = workload.batches();
     let begin = Instant::now();
-    let mut adapter = Prepared::new(workload, candidate)?;
+    let mut adapter =
+        Prepared::new_with_strategies(workload, candidate, strategy, enqueue_strategy)?;
     let mut output = vec![vec![0.; 256]];
     let mut tail = vec![vec![0.; workload.frames % 256]];
     let preparation_ns = ns(begin)?;
@@ -587,15 +687,10 @@ pub fn measure(
     }
     black_box(&rendered);
     let elapsed_ns = ns(begin)?;
-    let conformance = if first_mismatch(&expected, &rendered).is_none()
-        && adapter.observe() == workload.expected_state()
-    {
-        "pass"
-    } else {
-        "fail"
-    };
+    let failure = assess_trial_output(workload, &rendered, adapter.observe());
+    let conformance = if failure.is_none() { "pass" } else { "fail" };
     Ok(MeasuredTrial{schema_version:1,workload:workload.id.clone(),candidate,trial,order,frames:workload.frames as u64,sample_count:workload.frames as u64,elapsed_ns,preparation_ns,source:"monotonic".into(),
-        scope:"enqueue + preallocated render + identical output capture copy; fixture/events/oracle construction excluded".into(),block:256,asset_sample_bytes:(workload.samples.len()*4) as u64,output_buffer_bytes:((256+workload.frames%256)*4) as u64,allocator_memory_bytes:None,conformance:conformance.into()})
+        scope:"enqueue + preallocated render + identical output capture copy; fixture/events/oracle construction excluded".into(),block:256,asset_sample_bytes:(workload.samples.len()*4) as u64,output_buffer_bytes:((256+workload.frames%256)*4) as u64,allocator_memory_bytes:None,conformance:conformance.into(),failure})
 }
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Aggregate {
@@ -727,7 +822,7 @@ pub fn run(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
             summaries.push(aggregate(&workload.id, candidate, &trials, eligible)?);
         }
     }
-    let manifest = serde_json::json!({"schema_version":1,"kind":"offline-study","revision_at_run":results::command_text("git",&["rev-parse","HEAD"]),
+    let manifest = serde_json::json!({"schema_version":1,"kind":"offline-study","render_strategy":RenderStrategy::default(),"enqueue_strategy":EnqueueStrategy::default(),"render_fallback":"Generic for unsupported graph shapes; all current study workloads support FlatFused","revision_at_run":results::command_text("git",&["rev-parse","HEAD"]),
         "dirty_status_at_run":results::command_text("git",&["status","--porcelain"]),"compiler":env!("HARNESS_RUSTC"),"profile":env!("HARNESS_PROFILE"),"opt_level":env!("HARNESS_OPT_LEVEL"),"target":env!("HARNESS_TARGET"),"encoded_rustflags":env!("HARNESS_CARGO_ENCODED_RUSTFLAGS"),
         "hardware":results::command_text("sysctl",&["-n","machdep.cpu.brand_string"]),"os":results::command_text("uname",&["-sr"]),"dependency_lock":include_str!("../Cargo.lock"),"sample_rate":48000,"channels":1,"sample_format":"f32","quality":"exact-copy and fixed ordered f32 gain/sum; no smoothing",
         "warmups":3,"repeats":12,"ordering":"per-workload rotating candidate order each round; deterministic","timing_source":"Instant monotonic","timing_block":256,"conformance_blocks":[1,64,257],"limits":Limits::default(),
@@ -740,12 +835,21 @@ pub fn run(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
         serde_json::to_writer(&mut raw, trial)?;
         raw.push(b'\n');
     }
+    let resolved_workloads: Vec<_> = workloads
+        .iter()
+        .map(|workload| {
+            let mut record = serde_json::to_value(workload).expect("finite workload");
+            record["graph"] = serde_json::to_value(workload.graph()).expect("finite graph");
+            record["events"] = serde_json::to_value(workload.batches()).expect("valid events");
+            record
+        })
+        .collect();
     let dir = create_run_dir(root)?;
     write_artifacts(
         &dir,
         vec![
             ("manifest.json".into(), json_bytes(&manifest)?),
-            ("workloads.json".into(), json_bytes(&workloads)?),
+            ("workloads.json".into(), json_bytes(&resolved_workloads)?),
             (
                 "conformance.json".into(),
                 json_bytes(

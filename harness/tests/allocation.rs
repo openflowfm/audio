@@ -62,3 +62,50 @@ fn prepared_render_allocates_and_deallocates_nothing() {
     assert_eq!(CALLS.with(Cell::get), 0);
     assert_eq!(output[0][0], 2.);
 }
+
+#[test]
+fn prepared_mixed_and_dense_control_workloads_do_not_allocate_during_render() {
+    use audio_flow_harness::study::{Candidate, Mode, Prepared, Workload};
+    for (voices, mode, period) in [(64, Mode::Loop, 128), (16, Mode::Bursts, 64)] {
+        let workload = Workload::new("allocation-only", voices, 4096, mode, period, 23);
+        let mut adapter =
+            Prepared::new_with_strategy(&workload, Candidate::Offline, RenderStrategy::Generic)
+                .unwrap();
+        adapter.enqueue(workload.batches()).unwrap();
+        let mut output = vec![vec![0.; 4096]];
+        CALLS.with(|calls| calls.set(0));
+        ACTIVE.with(|active| active.set(true));
+        let result = adapter.render_into(&mut output);
+        ACTIVE.with(|active| active.set(false));
+        assert!(result.is_ok());
+        assert_eq!(CALLS.with(Cell::get), 0);
+        assert_eq!(output[0], workload.expected());
+    }
+}
+
+#[test]
+fn fused_flat_render_preserves_no_allocation_or_free_boundary() {
+    use audio_flow_harness::study::{Candidate, Mode, Prepared, Workload};
+    for (voices, mode, period) in [(64, Mode::Loop, 128), (16, Mode::Bursts, 64)] {
+        let workload = Workload::new("fused-allocation-only", voices, 4096, mode, period, 23);
+        let mut adapter = Prepared::new_with_strategies(
+            &workload,
+            Candidate::Offline,
+            RenderStrategy::FlatFused,
+            EnqueueStrategy::Counted,
+        )
+        .unwrap();
+        if let Prepared::Offline(ref state) = adapter {
+            assert_eq!(state.active_strategy(), RenderStrategy::FlatFused);
+        }
+        adapter.enqueue(workload.batches()).unwrap();
+        let mut output = vec![vec![0.; 4096]];
+        CALLS.with(|calls| calls.set(0));
+        ACTIVE.with(|active| active.set(true));
+        let result = adapter.render_into(&mut output);
+        ACTIVE.with(|active| active.set(false));
+        assert!(result.is_ok());
+        assert_eq!(CALLS.with(Cell::get), 0);
+        assert_eq!(output[0], workload.expected());
+    }
+}

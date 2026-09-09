@@ -1,6 +1,6 @@
 # Offline MVP contract
 
-This local implementation scope supersedes the harness-only pause. The production
+This is the implemented local offline contract. The production
 integration, native output, stretching and mix migration remain deferred. The
 experimental Rust library lives beside the harness until packaging is settled.
 
@@ -20,7 +20,8 @@ Default limits: 128 assets, 1,048,576 total asset frames, 1,024 graph nodes, 128
 16 outputs, 4,096 total graph edges, 4,096 pending commands, 256 commands per batch
 and per timestamp, and 4,096 frames per render block. Limits are explicit inputs;
 zero or values above these hard ceilings are rejected. These are safe offline
-budgets, not realtime guarantees. The render entry point writes caller-preallocated output buffers; a convenience
+budgets, not realtime guarantees. The render entry point writes caller-preallocated
+output buffers; a convenience
 allocating wrapper is for tests. Zero-frame rendering is a no-op. Allocation checks
 run separately from speed runs; device-callback reliability remains unverified.
 
@@ -73,3 +74,5 @@ Each runs under single-frame and uneven blocks. Targeted faulty adapters must lo
 on dropped seek, wrong exclusive loop endpoint, partial atomic acceptance and stale
 start revival. Seeded stress augments these literal oracles; candidate agreement
 alone never replaces them. No audio device, Node binding, UI or mix change is in scope.
+
+The generic renderer remains the default. An explicit [flat-dispatch experiment](harness-dispatch-experiment.md) recognizes one narrow topology and retains the generic fallback; it does not change this observable contract.

@@ -1,38 +1,49 @@
 # Harness adapters
 
-This layout is proposed pending discussion. No Rust scaffold or engine implementation
-exists. A Rust workspace could separate a dependency-light contract/fixture model,
-a correctness runner, a benchmark runner and individual candidate adapter crates.
-Public APIs and crate boundaries remain unresolved.
+One locked Rust package in `harness/` contains a small reusable offline module and
+its comparison tooling. It is deliberately not a production package layout. The
+library's [offline module](../harness/src/offline.rs) imports no harness oracle,
+transport, device or application policy; the runners depend on it, not vice versa.
+Crate separation and the eventual Node/TypeScript API remain future decisions.
 
-Use deterministic in-memory f32 fixtures and versioned JSON workload definitions.
-Adapters return typed PCM plus observable state and typed error results. Every
-comparison fixes inputs, events, rates, channels and quality settings. Unsupported
-behavior is a capability gap, not permission to quietly change the workload.
-
-| candidate | proposed comparison scope |
+| source | implemented responsibility |
 |---|---|
-| Firewheel | Graph and playback workloads |
-| FunDSP | Graph and DSP workloads |
-| Faust | Generated-processor unit comparisons; not an equivalent engine |
-| Minimal direct loop | Literal-copy baseline with explicitly limited scope |
+| [model](../harness/src/model.rs), [fixture](../harness/fixtures/first-copy.json) | Versioned dependency-light first-slice input, PCM/state/error boundary |
+| [conformance](../harness/src/conformance.rs), [contracts](../harness/src/contracts.rs) | Independent literal checks and retained mismatch evidence |
+| [reference](../harness/src/reference.rs), [external](../harness/src/external.rs) | Direct-copy and pinned FunDSP first-slice adapters |
+| [offline](../harness/src/offline.rs) | Assets, pure Graph compilation, immutable Program, explicit mutable RenderState |
+| [study](../harness/src/study.rs) | Deterministic workload model, flat direct/FunDSP adapters, correctness and measured runs |
+| [results](../harness/src/results.rs), [report](../harness/report.py) | Versioned artifacts, completion checks and derived local report |
 
-Candidate fit, versions, licenses and integration constraints are **unverified**
-pending primary-source review. These names are evaluation candidates, not selected
-dependencies. Processor-only results cannot establish scheduler or graph capability.
+Inputs are in-memory mono f32 at 48 kHz. The tracked literal JSON and generated,
+retained workload definitions use schema version 1. All candidates in a workload
+receive the same samples, events, rates, channels, fixed gains and external blocks.
+First-slice adapters return typed errors; study records distinguish failure from
+an explicit capability gap. Neither is a passing speed competitor.
 
-## Scheduling and cost attribution
+| candidate | evaluated scope and limitation |
+|---|---|
+| Offline MVP | Acyclic player/gain/ordered-sum graphs, named outputs and the [offline command contract](offline-contract.md) |
+| Direct loop | Specialized flat player/gain/sum baseline with fixed loops and adapter-scheduled starts; no general graph or timed stop/seek adapter |
+| FunDSP 0.20.0 | Native WavePlayer and fixed gain, adapter scheduling/position tracking/sum; scalar tick API, not optimized block/SIMD integration |
+| Firewheel | Deferred; no capability or license review completed |
+| Faust | Deferred processor-unit comparison; not an equivalent engine |
 
-Record whether scheduling is **native** or **adapter-emulated**. An adapter that
-splits blocks at event boundaries can establish candidate-plus-adapter correctness;
-it does not establish a native scheduler capability. Do not invent emulation just
-to conceal missing behavior. Report both the gap and any deliberate adaptation.
+FunDSP's exact version, enabled features, license option and inspected native
+boundaries are recorded in the [primary-source review](harness-reference-review.md).
+It is an experimental dependency, not a production engine selection.
 
-Keep external block partitions fixed across candidates in timed workloads. Record
-internal splitting and include dispatch, splitting and adaptation in end-to-end
-timing. Additional internal kernel figures must be labeled with their narrower
-scope. Kernel-only tests are distinct workloads from full event scheduling.
+## Scheduling and attribution
 
-Implement only the [first-slice contract](harness-contract.md) initially. A harness
-adapter is an experimental boundary, not a commitment to the eventual thin native
-Node binding and `@openflow/audio` API described in [architecture](architecture.md).
+The offline renderer handles batches natively at output-frame boundaries. The flat
+references emulate scheduled starts in their per-frame adapter; FunDSP position is
+adapter bookkeeping because the selected WavePlayer API does not expose it. Fixed
+loops are prepared natively in WavePlayer. Timed stop/seek/atomic cancellation is a
+gap of these reference adapters, not a claim that all of FunDSP lacks those features.
+
+All dispatch, adaptation and ordered summation are included in end-to-end study
+timing. External timed blocks are fixed at 256 frames, with a shorter final block;
+conformance also uses 1, 64 and 257. No kernel-only timings are currently produced.
+Future block splitting or narrower kernel measurements must be labeled explicitly.
+The flat references intentionally cover less behavior than the graph runtime; their
+costs are not a universal engine ranking.

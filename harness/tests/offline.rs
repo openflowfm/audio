@@ -225,6 +225,14 @@ fn bounds_rejections_and_repeated_cancellation_preserve_active_players() {
         assert_eq!(state.observe(), before);
     }
     assert_eq!(state.render(101).unwrap()[0], vec![0.; 101]);
+    state
+        .enqueue(Batch {
+            frame: 101,
+            revision: 20,
+            commands: vec![Command::Start(0)],
+        })
+        .unwrap();
+    assert_eq!(state.render(1).unwrap()[0], vec![1.]);
 }
 #[test]
 fn shared_program_states_are_independent_and_seek_end_is_silent() {
@@ -237,4 +245,120 @@ fn shared_program_states_are_independent_and_seek_end_is_silent() {
     first.enqueue(batch(1, vec![Command::Seek(0, 2)])).unwrap();
     assert_eq!(first.render(2).unwrap()[0], vec![0., 0.]);
     assert_eq!(first.observe().players[0].status, Playback::Ended);
+}
+
+#[test]
+fn cross_player_batches_validate_every_target_before_mutation() {
+    let mut assets = Assets::new(Limits::default()).unwrap();
+    assets.load(&[1., 2., 3., 4.], 48000).unwrap();
+    let program = Graph {
+        nodes: vec![Node::Player { asset: 0 }, Node::Player { asset: 0 }],
+        outputs: vec![("a".into(), 0), ("b".into(), 1)],
+    }
+    .compile(&assets, Limits::default())
+    .unwrap();
+    let mut state = RenderState::new(Arc::new(program));
+    let before = state.observe();
+    assert_eq!(
+        state.enqueue(batch(
+            0,
+            vec![Command::Start(0), Command::Seek(1, 5), Command::Start(1)]
+        )),
+        Err(Error::InvalidSeek)
+    );
+    assert_eq!(state.observe(), before);
+    assert_eq!(state.render(1).unwrap(), vec![vec![0.], vec![0.]]);
+    state
+        .enqueue(batch(
+            1,
+            vec![
+                Command::Seek(0, 1),
+                Command::Start(0),
+                Command::Seek(1, 2),
+                Command::Start(1),
+            ],
+        ))
+        .unwrap();
+    assert_eq!(state.render(2).unwrap(), vec![vec![2., 3.], vec![3., 4.]]);
+}
+
+#[test]
+fn each_graph_and_event_budget_is_checked_at_the_boundary() {
+    assert!(Assets::new(Limits {
+        assets: 0,
+        ..Limits::default()
+    })
+    .is_err());
+    assert!(Assets::new(Limits {
+        block_frames: 4097,
+        ..Limits::default()
+    })
+    .is_err());
+    let mut assets = Assets::new(Limits {
+        assets: 1,
+        asset_frames: 4,
+        ..Limits::default()
+    })
+    .unwrap();
+    assert_eq!(assets.load(&[1.; 5], 48000), Err(Error::ResourceLimit));
+    assets.load(&[1.; 4], 48000).unwrap();
+    assert_eq!(assets.load(&[1.], 48000), Err(Error::ResourceLimit));
+    let graph = Graph {
+        nodes: vec![
+            Node::Player { asset: 0 },
+            Node::Player { asset: 0 },
+            Node::Sum { inputs: vec![0, 1] },
+        ],
+        outputs: vec![("main".into(), 2), ("tap".into(), 0)],
+    };
+    for limits in [
+        Limits {
+            nodes: 2,
+            ..Limits::default()
+        },
+        Limits {
+            players: 1,
+            ..Limits::default()
+        },
+        Limits {
+            outputs: 1,
+            ..Limits::default()
+        },
+        Limits {
+            edges: 1,
+            ..Limits::default()
+        },
+        Limits {
+            asset_frames: 3,
+            ..Limits::default()
+        },
+    ] {
+        assert!(graph.compile(&assets, limits).is_err());
+    }
+    let program = graph
+        .compile(
+            &assets,
+            Limits {
+                batch_commands: 1,
+                commands_per_frame: 1,
+                ..Limits::default()
+            },
+        )
+        .unwrap();
+    let mut state = RenderState::new(Arc::new(program));
+    let before = state.observe();
+    assert_eq!(
+        state.enqueue(batch(0, vec![Command::Start(0), Command::Start(1)])),
+        Err(Error::ResourceLimit)
+    );
+    assert_eq!(state.observe(), before);
+    state.enqueue(batch(0, vec![Command::Start(0)])).unwrap();
+    let before = state.observe();
+    assert_eq!(
+        state.enqueue(batch(0, vec![Command::Start(1)])),
+        Err(Error::ResourceLimit)
+    );
+    assert_eq!(state.observe(), before);
+    state.enqueue(batch(1, vec![Command::Start(1)])).unwrap();
+    assert_eq!(state.render(2).unwrap()[0], vec![1., 2.]);
 }

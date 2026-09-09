@@ -5,10 +5,10 @@ reference scope, not a production dependency or a general engine winner.
 
 FunDSP **0.20.0** is pinned exactly, with default features disabled and only `std`
 enabled. It is an intentionally fixed older release with published API documentation;
-latest is 0.23.0, which is not evaluated here. Cargo.lock pins transitive versions.
+The latest release observed during that review was 0.23.0, not evaluated here. Cargo.lock pins transitive versions.
 The downloaded package's Cargo.toml and LICENSE-MIT identify `MIT OR Apache-2.0`;
-this effort uses the MIT option. The harness's own code is MIT. No redistribution
-or publication is authorized.
+this effort uses the MIT option. The repository's own code is MIT. This local
+evaluation performs no new publication.
 
 Primary sources: [versioned package](https://crates.io/crates/fundsp/0.20.0),
 [versioned source](https://docs.rs/crate/fundsp/0.20.0/source/),

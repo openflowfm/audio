@@ -132,8 +132,25 @@ enum Op {
     Gain(usize, f32),
     Sum(Vec<usize>),
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum RenderStrategy {
+    Generic,
+    #[default]
+    FlatFused,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum EnqueueStrategy {
+    #[default]
+    Scan,
+    Counted,
+}
+struct FlatVoice {
+    player: usize,
+    gain: f32,
+}
 pub struct Program {
     ops: Vec<(usize, Op)>,
+    flat: Option<Vec<FlatVoice>>,
     assets: Vec<Arc<[f32]>>,
     outputs: Vec<(String, usize)>,
     nodes: usize,
@@ -232,16 +249,55 @@ impl Graph {
                 )
             })
             .collect();
+        let flat = self.flat_voices(&player_ids);
         Ok(Program {
             ops,
+            flat,
             assets: player_assets,
             outputs: self.outputs.clone(),
             nodes: self.nodes.len(),
             limits,
         })
     }
+    // Narrow shape only: exactly one sum of distinct gain(player) branches,
+    // all nodes/players used exactly once. Everything else retains generic execution.
+    fn flat_voices(&self, player_ids: &[Option<usize>]) -> Option<Vec<FlatVoice>> {
+        if self.outputs.len() != 1 {
+            return None;
+        }
+        let output = self.outputs[0].1;
+        let Node::Sum { inputs } = &self.nodes[output] else {
+            return None;
+        };
+        let mut seen = vec![false; self.nodes.len()];
+        seen[output] = true;
+        let mut voices = Vec::with_capacity(inputs.len());
+        for &input in inputs {
+            if seen[input] {
+                return None;
+            }
+            let Node::Gain {
+                input: player,
+                gain,
+            } = self.nodes[input]
+            else {
+                return None;
+            };
+            if seen[player] {
+                return None;
+            }
+            let id = player_ids[player]?;
+            seen[input] = true;
+            seen[player] = true;
+            voices.push(FlatVoice { player: id, gain });
+        }
+        seen.into_iter().all(|value| value).then_some(voices)
+    }
 }
 impl Program {
+    pub fn supports_flat_fused(&self) -> bool {
+        self.flat.is_some()
+    }
     pub fn output_names(&self) -> Vec<&str> {
         self.outputs.iter().map(|(name, _)| name.as_str()).collect()
     }
@@ -293,6 +349,9 @@ pub struct Batch {
 }
 pub struct RenderState {
     program: Arc<Program>,
+    strategy: RenderStrategy,
+    enqueue_strategy: EnqueueStrategy,
+    pending_commands: usize,
     players: Vec<PlayerState>,
     scratch: Vec<f32>,
     frame: u64,
@@ -302,7 +361,20 @@ pub struct RenderState {
 }
 impl RenderState {
     pub fn new(program: Arc<Program>) -> Self {
+        Self::new_with_strategy(program, RenderStrategy::default())
+    }
+    pub fn new_with_strategy(program: Arc<Program>, strategy: RenderStrategy) -> Self {
+        Self::new_with_strategies(program, strategy, EnqueueStrategy::default())
+    }
+    pub fn new_with_strategies(
+        program: Arc<Program>,
+        strategy: RenderStrategy,
+        enqueue_strategy: EnqueueStrategy,
+    ) -> Self {
         Self {
+            strategy,
+            enqueue_strategy,
+            pending_commands: 0,
             players: vec![
                 PlayerState {
                     position: 0,
@@ -319,6 +391,13 @@ impl RenderState {
             program,
         }
     }
+    pub fn active_strategy(&self) -> RenderStrategy {
+        if self.strategy == RenderStrategy::FlatFused && self.program.flat.is_some() {
+            RenderStrategy::FlatFused
+        } else {
+            RenderStrategy::Generic
+        }
+    }
     pub fn observe(&self) -> Observation {
         Observation {
             output_frame: self.frame,
@@ -333,6 +412,7 @@ impl RenderState {
         }
         self.revision = new;
         self.queue.clear();
+        self.pending_commands = 0;
         self.cursor = 0;
         Ok(())
     }
@@ -348,16 +428,31 @@ impl RenderState {
         }
         let limits = self.program.limits;
         let pending = &self.queue[self.cursor..];
+        // Keep identical accounting on both controls; only the budget lookup differs.
+        let (total, same_frame) = match self.enqueue_strategy {
+            EnqueueStrategy::Scan => (
+                pending.iter().map(|b| b.commands.len()).sum::<usize>(),
+                pending
+                    .iter()
+                    .filter(|b| b.frame == batch.frame)
+                    .map(|b| b.commands.len())
+                    .sum::<usize>(),
+            ),
+            EnqueueStrategy::Counted => {
+                let start = pending.partition_point(|b| b.frame < batch.frame);
+                let end = pending.partition_point(|b| b.frame <= batch.frame);
+                (
+                    self.pending_commands,
+                    pending[start..end]
+                        .iter()
+                        .map(|b| b.commands.len())
+                        .sum::<usize>(),
+                )
+            }
+        };
         if batch.commands.len() > limits.batch_commands
-            || pending.iter().map(|b| b.commands.len()).sum::<usize>() + batch.commands.len()
-                > limits.pending_commands
-            || pending
-                .iter()
-                .filter(|b| b.frame == batch.frame)
-                .map(|b| b.commands.len())
-                .sum::<usize>()
-                + batch.commands.len()
-                > limits.commands_per_frame
+            || batch.commands.len() > limits.pending_commands.saturating_sub(total)
+            || batch.commands.len() > limits.commands_per_frame.saturating_sub(same_frame)
         {
             return Err(Error::ResourceLimit);
         }
@@ -383,6 +478,7 @@ impl RenderState {
             self.cursor = 0;
         }
         let index = self.queue.partition_point(|b| b.frame <= batch.frame);
+        self.pending_commands += batch.commands.len();
         self.queue.insert(index, batch);
         Ok(())
     }
@@ -410,6 +506,9 @@ impl RenderState {
         self.frame
             .checked_add(frames as u64)
             .ok_or(Error::FrameOverflow)?;
+        if self.active_strategy() == RenderStrategy::FlatFused {
+            return self.render_flat_into(output);
+        }
         for frame in 0..frames {
             while self.cursor < self.queue.len() && self.queue[self.cursor].frame == self.frame {
                 for &command in &self.queue[self.cursor].commands {
@@ -426,6 +525,7 @@ impl RenderState {
                         Command::SetLoop(_, region) => player.loop_region = region,
                     }
                 }
+                self.pending_commands -= self.queue[self.cursor].commands.len();
                 self.cursor += 1;
             }
             for (id, op) in &self.program.ops {
@@ -467,6 +567,61 @@ impl RenderState {
             for (channel, (_, node)) in output.iter_mut().zip(&self.program.outputs) {
                 channel[frame] = self.scratch[*node];
             }
+            self.frame += 1;
+        }
+        Ok(())
+    }
+    // One block-level dispatch; command application remains per sample, unchanged.
+    #[inline(never)]
+    fn render_flat_into(&mut self, output: &mut [Vec<f32>]) -> Result<(), Error> {
+        let voices = self.program.flat.as_ref().unwrap();
+        for frame in 0..output[0].len() {
+            while self.cursor < self.queue.len() && self.queue[self.cursor].frame == self.frame {
+                for &command in &self.queue[self.cursor].commands {
+                    let player = &mut self.players[command.player()];
+                    match command {
+                        Command::Start(_) => player.status = Playback::Playing,
+                        Command::Stop(_) => player.status = Playback::Stopped,
+                        Command::Seek(_, position) => {
+                            player.position = position;
+                            if player.status == Playback::Ended {
+                                player.status = Playback::Stopped;
+                            }
+                        }
+                        Command::SetLoop(_, region) => player.loop_region = region,
+                    }
+                }
+                self.pending_commands -= self.queue[self.cursor].commands.len();
+                self.cursor += 1;
+            }
+            let mut sum = 0.;
+            for voice in voices {
+                let player = &mut self.players[voice.player];
+                let asset = &self.program.assets[voice.player];
+                let mut sample = 0.;
+                if player.status == Playback::Playing {
+                    if let Some((start, end)) = player.loop_region {
+                        if player.position < start || player.position >= end {
+                            player.position = start;
+                        }
+                    }
+                    if player.position < asset.len() {
+                        sample = asset[player.position];
+                        player.position += 1;
+                    }
+                    if let Some((start, end)) = player.loop_region {
+                        if player.position == end {
+                            player.position = start;
+                        }
+                    } else if player.position == asset.len() {
+                        player.status = Playback::Ended;
+                    }
+                }
+                // Separate multiply/add, preserving the declared sum order.
+                let scaled = sample * voice.gain;
+                sum += scaled;
+            }
+            output[0][frame] = sum;
             self.frame += 1;
         }
         Ok(())
