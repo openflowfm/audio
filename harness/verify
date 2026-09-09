@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")"
+cargo fmt --all -- --check
+cargo build --locked --all-targets
+cargo test --locked --all-targets
+python3 -B -m unittest discover -p 'report_test.py'
