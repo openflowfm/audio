@@ -49,8 +49,9 @@ export interface FixtureHostSnapshot {
     appliedBatches: number;
     rejectedBatches: number;
     processedBatches: number;
-    deadlineMisses: number;
-    maxCallbackNanos: number;
+    /** Renderer adapter timing only; excludes publication/CPAL overhead and DAC timing. */
+    processDeadlineMisses: number;
+    maxProcessNanos: number;
     publicationDrops: number;
     processErrors: number;
     lastErrorCode: 0 | 1 | 2;

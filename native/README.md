@@ -121,8 +121,9 @@ and seek. `publicationDrops` counts failed publication attempts as of that
 observation. `lastErrorCode`: 0 none, 1 processing failure, 2 command rejection;
 `processErrors` counts failed callback processing. Processing failure silences
 the entire device span. `streamErrors` is a separate relaxed atomic callback
-error count, not frame-coherent and **not an underrun counter**. Deadline misses
-measure renderer CPU duration, not physical deadlines. No callback string logging.
+error count, not frame-coherent and **not an underrun counter**. `processDeadlineMisses`
+and `maxProcessNanos` measure the renderer adapter only, excluding publication and CPAL
+callback overhead; they do not measure physical device deadlines. No callback string logging.
 
 Publication uses preallocated rtrb queues (acquire/release index atomics); stream
 errors use a pointer-width atomic fetch-add. No locks, allocation, Node, files,

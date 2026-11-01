@@ -193,7 +193,7 @@ impl ExperimentalFixtureHost {
             "observation": if self.observed { Some(json!({"outputFrame": p.frame,
                 "players": p.players.map(|v| json!({"sourceFrame": v.position, "status": v.status, "loop": v.region})),
                 "callbacks": p.callbacks, "appliedBatches": p.applied, "rejectedBatches": p.rejected,
-                "processedBatches": p.applied + p.rejected, "deadlineMisses": p.misses, "maxCallbackNanos": p.max_nanos,
+                "processedBatches": p.applied + p.rejected, "processDeadlineMisses": p.misses, "maxProcessNanos": p.max_nanos,
                 "publicationDrops": p.dropped, "processErrors": p.process_errors, "lastErrorCode": p.last_error})) } else { None }})
     }
     #[napi]
