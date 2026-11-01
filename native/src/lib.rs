@@ -1,4 +1,7 @@
 //! Experimental synchronous preparation/offline binding. Never opens a stream.
+pub mod output;
+#[cfg(test)]
+mod output_tests;
 use audio_flow_harness::offline::{Assets, Batch, Command, Graph, Limits, Node, RenderState};
 use cpal::traits::{DeviceTrait, HostTrait};
 use napi::{Error, Result};

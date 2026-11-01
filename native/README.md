@@ -56,11 +56,50 @@ ordered graph sum. These are graph output names, not physical hardware channels.
 Ten frames include trailing silence; zero frames leave starts pending. Every call
 starts from scratch; this is not a transport/session API.
 
-## Remaining host work
+## Rust-only simulated callback seam
 
-No selected-device management, channel-map application, stream lifecycle, format
-conversion/resampling, callback adapter, deadline/underrun instrumentation,
-UI-stall proof, off-callback publication/reclamation, or hardware acceptance is
-implemented. Streaming/decode, WING sessions, seek/loop application controls and
-capture also remain future work. The existing [offline contract](../docs/offline-contract.md)
-is unchanged. Do not infer realtime or host-playback support from these tests.
+`output::Callback::prepare(program, rate, format, channels, chunk, mappings)`
+prepares a render state, planar scratch and explicit `(output_name, physical_index)`
+routes off callback. Only 48 kHz f32 is accepted, with 1–128 device channels and
+chunks within the Program block limit. Unknown names, duplicate output names,
+duplicate physical destinations, out-of-range indices and empty maps reject.
+Unmapped channels are zero; there is no fallback, conversion or downmix.
+
+It returns a single-producer `Controller` and callback-owned `Callback`.
+`ControlBatch::new(revision, commands)` copies at most 16 commands into inline
+storage. `Controller::submit` uses a preallocated rtrb SPSC queue of 32 batches,
+returning the batch on queue-full and incrementing a producer-side counter.
+`Callback::process(&mut [f32])` handles at most four batches (64 commands) at the
+start of a nonempty callback, validates each atomically using the original
+renderer, then renders arbitrary interleaved spans in bounded scratch chunks.
+Start/Stop/Seek/SetLoop are generic renderer commands, not a second transport.
+Command application is callback-boundary quantized; excess batches wait for a
+later callback. Partition invariance applies without newly delivered controls,
+not to different command-arrival schedules. Empty callbacks are no-ops; malformed
+spans are silenced/rejected without consuming controls or advancing time.
+
+`Callback::snapshot()` is a borrowed, nonallocating authoritative renderer view:
+continuous next-output frame and actual next-source frames, statuses and loops.
+It is **not** a cross-thread publication API. Callback diagnostics count callbacks,
+applied/rejected batches, last rejection, maximum elapsed duration and duration
+exceeding the supplied span's 48 kHz deadline. These are simulated CPU duration
+measurements, **not measured underruns** or proof of device timing. Stream errors
+are not instrumented because no stream exists. No logging occurs in process.
+
+## Remaining host work / safety boundary
+
+No CPAL stream or fixture-host NAPI API is implemented. `nativeOutputAvailable`
+remains false. Device selection must eventually revalidate an ephemeral ID plus
+expected descriptor/configuration at open, with no default/fallback. Cross-thread
+observation publication, stream-error reporting, shutdown acknowledgement,
+off-callback reclamation and human hardware routing/timing acceptance remain gates.
+Prepared state, scratch, Program references and queue endpoints must be destroyed
+**off callback after it stops**, never by dropping them during active rendering.
+That lifecycle guarantee is not established by a live host here; do not call this
+seam production realtime-safe. Processing uses no mutex, filesystem, JSON or Node
+calls and allocator guards verify zero allocations **and frees** on simulated
+success, rejection and queue-pressure paths. OS clock latency and hardware behavior
+are not established. No test opens or starts a device stream.
+
+Streaming/decode, resampling, WING sessions, UI integration and capture remain out
+of scope. See the [offline contract](../docs/offline-contract.md).

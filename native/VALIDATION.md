@@ -1,5 +1,36 @@
 # Bounded native bridge validation
 
+## Native output seam checkpoint (wing/native-output)
+
+Implemented renderer borrowed immediate control/observation and prepared-buffer
+prefix rendering, plus Rust-only simulated callback adapter. No device streams
+were built or started. CPAL fixture host and NAPI transport remain deferred.
+
+- `cargo test --manifest-path native/Cargo.toml --locked`: 4 unit tests pass,
+  including three callback adapter tests; doctests pass.
+- Literal four-physical-channel f32 routing (two mapped, two silent), loop endpoint,
+  chunk sizes 1/3/4 and uneven callback partitions produce identical exact samples.
+- Atomic invalid-seek rejection, pause/seek readback, continuous output time,
+  duplicate/invalid routes, unsupported formats/rates, malformed/empty spans,
+  queue-full and four-batches-per-callback ceiling are tested.
+- Thread-local global allocator guards count alloc/alloc_zeroed/realloc/dealloc:
+  zero calls in callback success/loop/observation and rejection/control/queue-pressure
+  paths; preparation and teardown excluded.
+- Harness allocation suite: 5 tests pass; new immediate seam suite: 2 tests pass.
+- Original `./harness/verify --output-root /tmp/audio-output-verify`: passed all
+  checks; report `/tmp/audio-output-verify/audio-run-z6fiijqm/report.html`.
+- `npm test --prefix native`: release addon rebuild and all 4 original Node tests
+  passed. Device enumeration only; no playback.
+- Initial integration-test arrangement hit unresolved NAPI symbols outside Node;
+  moved callback tests into the library unit-test target (same adapter code), then
+  the locked Rust suite passed. No production NAPI feature workaround was added.
+
+No hardware, cross-thread observation publication, stream shutdown/reclamation or
+real deadline/underrun acceptance is claimed. Exact API and limitations are in
+[README](README.md).
+
+## Prior bridge baseline
+
 Local Linux run, 2026-11-01, Node **v26.13.0**, npm **11.20.0**, ALSA
 pkg-config **1.2.16.1**. Implemented by Codex on `wing/native-bridge`.
 

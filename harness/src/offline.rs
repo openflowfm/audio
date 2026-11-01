@@ -301,6 +301,9 @@ impl Program {
     pub fn output_names(&self) -> Vec<&str> {
         self.outputs.iter().map(|(name, _)| name.as_str()).collect()
     }
+    pub fn block_frame_limit(&self) -> usize {
+        self.limits.block_frames
+    }
     pub fn player_count(&self) -> usize {
         self.assets.len()
     }
@@ -326,6 +329,13 @@ pub struct Observation {
     pub revision: u64,
     pub pending_batches: usize,
     pub players: Vec<PlayerState>,
+}
+/// Borrowed authoritative state; constructing this view neither allocates nor clones.
+pub struct ObservationRef<'a> {
+    pub output_frame: u64,
+    pub revision: u64,
+    pub pending_batches: usize,
+    pub players: &'a [PlayerState],
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
@@ -406,6 +416,53 @@ impl RenderState {
             players: self.players.clone(),
         }
     }
+    pub fn observe_ref(&self) -> ObservationRef<'_> {
+        ObservationRef {
+            output_frame: self.frame,
+            revision: self.revision,
+            pending_batches: self.queue.len() - self.cursor,
+            players: &self.players,
+        }
+    }
+    /// Apply a borrowed batch now, before any queued commands at the next frame.
+    /// The caller must bound the number of invocations per callback. No storage is retained.
+    pub fn apply_immediate(&mut self, revision: u64, commands: &[Command]) -> Result<(), Error> {
+        if revision != self.revision {
+            return Err(Error::StaleRevision);
+        }
+        if commands.is_empty() {
+            return Err(Error::EmptyBatch);
+        }
+        if commands.len() > self.program.limits.batch_commands
+            || commands.len() > self.program.limits.commands_per_frame
+        {
+            return Err(Error::ResourceLimit);
+        }
+        self.validate_commands(commands)?;
+        for &command in commands {
+            apply_command(&mut self.players, command);
+        }
+        Ok(())
+    }
+    fn validate_commands(&self, commands: &[Command]) -> Result<(), Error> {
+        for &command in commands {
+            let asset = self
+                .program
+                .assets
+                .get(command.player())
+                .ok_or(Error::UnknownPlayer)?;
+            match command {
+                Command::Seek(_, position) if position > asset.len() => {
+                    return Err(Error::InvalidSeek)
+                }
+                Command::SetLoop(_, Some((start, end))) if start >= end || end > asset.len() => {
+                    return Err(Error::InvalidLoop)
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
     pub fn advance_revision(&mut self, new: u64) -> Result<(), Error> {
         if new <= self.revision {
             return Err(Error::StaleRevision);
@@ -456,22 +513,7 @@ impl RenderState {
         {
             return Err(Error::ResourceLimit);
         }
-        for &command in &batch.commands {
-            let asset = self
-                .program
-                .assets
-                .get(command.player())
-                .ok_or(Error::UnknownPlayer)?;
-            match command {
-                Command::Seek(_, position) if position > asset.len() => {
-                    return Err(Error::InvalidSeek)
-                }
-                Command::SetLoop(_, Some((start, end))) if start >= end || end > asset.len() => {
-                    return Err(Error::InvalidLoop)
-                }
-                _ => {}
-            }
-        }
+        self.validate_commands(&batch.commands)?;
         // Preparation-side reclamation only; render never drops queued command storage.
         if self.cursor > 0 {
             self.queue.drain(..self.cursor);
@@ -500,6 +542,19 @@ impl RenderState {
         if output.iter().any(|channel| channel.len() != frames) {
             return Err(Error::InvalidBuffer);
         }
+        self.render_into_prefix(output, frames)
+    }
+    /// Render into the first `frames` of prepared planar buffers, retaining their lengths.
+    pub fn render_into_prefix(
+        &mut self,
+        output: &mut [Vec<f32>],
+        frames: usize,
+    ) -> Result<(), Error> {
+        if output.len() != self.program.outputs.len()
+            || output.iter().any(|channel| channel.len() < frames)
+        {
+            return Err(Error::InvalidBuffer);
+        }
         if frames > self.program.limits.block_frames {
             return Err(Error::ResourceLimit);
         }
@@ -507,7 +562,7 @@ impl RenderState {
             .checked_add(frames as u64)
             .ok_or(Error::FrameOverflow)?;
         if self.active_strategy() == RenderStrategy::FlatFused {
-            return self.render_flat_into(output);
+            return self.render_flat_into(output, frames);
         }
         for frame in 0..frames {
             while self.cursor < self.queue.len() && self.queue[self.cursor].frame == self.frame {
@@ -573,9 +628,9 @@ impl RenderState {
     }
     // One block-level dispatch; command application remains per sample, unchanged.
     #[inline(never)]
-    fn render_flat_into(&mut self, output: &mut [Vec<f32>]) -> Result<(), Error> {
+    fn render_flat_into(&mut self, output: &mut [Vec<f32>], frames: usize) -> Result<(), Error> {
         let voices = self.program.flat.as_ref().unwrap();
-        for frame in 0..output[0].len() {
+        for frame in 0..frames {
             while self.cursor < self.queue.len() && self.queue[self.cursor].frame == self.frame {
                 for &command in &self.queue[self.cursor].commands {
                     let player = &mut self.players[command.player()];
@@ -625,5 +680,20 @@ impl RenderState {
             self.frame += 1;
         }
         Ok(())
+    }
+}
+
+fn apply_command(players: &mut [PlayerState], command: Command) {
+    let player = &mut players[command.player()];
+    match command {
+        Command::Start(_) => player.status = Playback::Playing,
+        Command::Stop(_) => player.status = Playback::Stopped,
+        Command::Seek(_, position) => {
+            player.position = position;
+            if player.status == Playback::Ended {
+                player.status = Playback::Stopped;
+            }
+        }
+        Command::SetLoop(_, region) => player.loop_region = region,
     }
 }
