@@ -1,4 +1,5 @@
-//! Experimental synchronous preparation/offline binding. Never opens a stream.
+//! Experimental binding. Streams open only through explicit fixture-host opt-in.
+mod fixture_host;
 pub mod output;
 #[cfg(test)]
 mod output_tests;
@@ -17,7 +18,8 @@ fn failure(error: impl std::fmt::Debug) -> Error {
 pub fn engine_info() -> Value {
     json!({
         "experimental": true, "nativeOutputAvailable": false,
-        "status": "offline-only; no stream or realtime proof",
+        "experimentalFixtureHostAvailable": cfg!(target_os = "linux"),
+        "status": "recording output unavailable; opt-in RAM fixture only; no realtime proof",
         "sampleRate": 48000, "assetFormat": "mono f32 RAM, finite nonempty samples",
         "limits": Limits::default(), "deviceIds": "ephemeral host/name/index; not persistent"
     })

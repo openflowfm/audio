@@ -1,7 +1,8 @@
-/** Experimental synchronous offline API. No stream is opened; not realtime-safe. */
+/** Experimental native API. Only explicit fixture-host open accesses playback. */
 export function engineInfo(): {
   experimental: true;
   nativeOutputAvailable: false;
+  experimentalFixtureHostAvailable: boolean;
   status: string;
   sampleRate: 48000;
   assetFormat: string;

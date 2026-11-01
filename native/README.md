@@ -2,7 +2,8 @@
 
 This is a thin napi-rs binding around `audio-flow-harness::offline`, via an
 in-repository Cargo path dependency. No DSP implementation is copied. CPAL queries
-actual native output capabilities; **nothing opens a stream or emits audio**.
+actual native output capabilities. Import, enumeration and tests never open streams.
+**Only `openExperimentalFixtureHost` explicitly opens/starts a device stream.**
 This is a stepping stone, not Stage 2 completion or a production package.
 
 ## Build / verify
@@ -86,13 +87,63 @@ exceeding the supplied span's 48 kHz deadline. These are simulated CPU duration
 measurements, **not measured underruns** or proof of device timing. Stream errors
 are not instrumented because no stream exists. No logging occurs in process.
 
-## Remaining host work / safety boundary
+## Opt-in experimental fixture host (Linux/ALSA only)
 
-No CPAL stream or fixture-host NAPI API is implemented. `nativeOutputAvailable`
-remains false. Device selection must eventually revalidate an ephemeral ID plus
-expected descriptor/configuration at open, with no default/fallback. Cross-thread
-observation publication, stream-error reporting, shutdown acknowledgement,
-off-callback reclamation and human hardware routing/timing acceptance remain gates.
+`openExperimentalFixtureHost({ deviceId, expectedName, channels, mappings })`
+explicitly opens and starts a 48 kHz f32 stream. Do not call this in automated
+checks or without hardware playback authorization. `deviceId` is exactly an
+ID returned by `listOutputDevices`; `expectedName` is its exact name. Open
+re-enumerates and rechecks ID, name and advertised 48 kHz f32 channel count.
+No default, format conversion, stereo fallback or name-based selection exists.
+An enumeration-index ID plus name cannot distinguish identical-name devices
+swapped between discovery and open; OS identity and hotplug races remain gates.
+Mappings are `{ output: 'fixture.left' | 'fixture.right', physical: number }[]`,
+with zero-based physical channels and the existing strict mapping rules.
+
+The fixture is 12000 source frames (250 ms), independent 440/660 Hz sine RAM
+assets at amplitude 0.02 using the existing Assets/Graph/Program/RenderState.
+It starts paused. `play()` and `pause()` enqueue starts/stops for both players;
+`seek(sourceFrame)` queues a two-player source-frame seek; `setLoop([start,end])`
+queues a half-open source loop, `setLoop(null)` disables it. Playback does not
+implicitly rewind ended players. There is no recording/session/file playback.
+All methods return `{ queuedBatch, applied: false }` on enqueue, not a promise
+of application. Queue-full/closed requests throw. Renderer-invalid commands
+are rejected atomically later, observable as rejected batches.
+
+`snapshot()` drains at most 32 copy-only SPSC publications and returns the
+latest coherent callback frame/player/diagnostic observation, or null before
+publication. It never waits for fresh state. `queuedBatches`/`queueFull` are
+control-thread counters; `processedBatches = appliedBatches + rejectedBatches`
+is the observed prefix of the command FIFO. Publications can lag (and drop
+when full); there is no independent guessed player state. Player numeric status
+is 0 stopped, 1 playing, 2 ended. Engine output time continues through pause
+and seek. `publicationDrops` counts failed publication attempts as of that
+observation. `lastErrorCode`: 0 none, 1 processing failure, 2 command rejection;
+`processErrors` counts failed callback processing. Processing failure silences
+the entire device span. `streamErrors` is a separate relaxed atomic callback
+error count, not frame-coherent and **not an underrun counter**. Deadline misses
+measure renderer CPU duration, not physical deadlines. No callback string logging.
+
+Publication uses preallocated rtrb queues (acquire/release index atomics); stream
+errors use a pointer-width atomic fetch-add. No locks, allocation, Node, files,
+or retries are introduced into the data/error callbacks. These atomics still
+have cache-coherence costs; no production realtime claim is made.
+
+`close()` is explicit and idempotent; later controls throw, snapshots remain
+available. Node object collection also drops the stream. Audited CPAL 0.15.3
+ALSA `Stream::drop` wakes and joins its worker; its callback closure and prepared
+renderer are destroyed after the worker loop exits, not during active processing.
+Close/GC can therefore block the Node thread; join duration and driver hangs or
+panics have not been proven safe. CPAL may start its worker at build, before
+`play()`, so all callback state is prepared before build. Other platforms are
+rejected at open pending lifecycle audit. Hardware shutdown/reopen acceptance,
+UI-stall/deadline tests and physical routing remain pending.
+
+## Remaining safety boundary
+
+`nativeOutputAvailable` remains false for the unimplemented recording-player
+path; `experimentalFixtureHostAvailable` advertises the separate Linux fixture.
+Human hardware routing/timing acceptance remains a gate.
 Prepared state, scratch, Program references and queue endpoints must be destroyed
 **off callback after it stops**, never by dropping them during active rendering.
 That lifecycle guarantee is not established by a live host here; do not call this
