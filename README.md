@@ -9,7 +9,8 @@ production audio engine or an application.
 
 The local offline MVP covers RAM players, fixed gain/sum, named outputs and timed
 atomic command batches. An [experimental native Node binding](native/README.md) reuses that renderer and
-queries output-device capabilities without opening streams. Native output,
+queries output-device capabilities without opening streams and exposes an explicit
+opt-in Linux/ALSA short RAM sine fixture host. Recording-player native output,
 stretching and application integration remain deferred. Comparative results do not select a production engine.
 
 The repository root is also the experimental `@openflow/audio` Node package. Consumers pin a Git commit; its `prepare` builds the addon locally (Rust/Cargo and platform audio development libraries required). `npm run build` and `npm test` exercise the same native package. This is source-build development integration, not prebuilt production distribution.
