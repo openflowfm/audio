@@ -5,7 +5,9 @@ This is the longer-term architecture. The implemented subset is governed by the
 a Program and independent mutable render states. Production crate/API boundaries
 remain open. Eventual integration is a thin native Node
 binding and an `@openflow/audio` TypeScript API in the same repository as the Rust
-core, not a separate server process. The [comparison harness](harness-decisions.md)
+core, not a separate server process. The [experimental bridge](../native/README.md)
+now exposes a deterministic offline fixture and native device-capability queries
+from Node; it has no device stream, host routing or realtime proof. The [comparison harness](harness-decisions.md)
 evaluates the offline subset; production dependency choices remain unvalidated.
 The sections below also describe future program replacement, processing and host
 contracts that the current offline implementation does not yet provide.

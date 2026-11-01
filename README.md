@@ -1,15 +1,18 @@
 # audio[flow]
 
 An experimental reusable, headless Rust audio library for open[flow], with
-mix[flow] as its intended first consumer. This independent repository contains
+wing[flow] as its bounded first end-to-end consumer and mix[flow] supplying richer timing requirements. This independent repository contains
 an offline Graph → Program → mutable render-state implementation and a comparison
 harness with source, tests,
 a locked Cargo package, fixtures and a Python report generator. It is not yet a
 production audio engine or an application.
 
 The local offline MVP covers RAM players, fixed gain/sum, named outputs and timed
-atomic command batches. Native output, bindings, stretching and application
-integration remain deferred. Comparative results do not select a production engine.
+atomic command batches. An [experimental native Node binding](native/README.md) reuses that renderer and
+queries output-device capabilities without opening streams. Native output,
+stretching and application integration remain deferred. Comparative results do not select a production engine.
+
+The repository root is also the experimental `@openflow/audio` Node package. Consumers pin a Git commit; its `prepare` builds the addon locally (Rust/Cargo and platform audio development libraries required). `npm run build` and `npm test` exercise the same native package. This is source-build development integration, not prebuilt production distribution.
 
 This is an index. Read only the topic that matches the work.
 
@@ -25,6 +28,7 @@ This is an index. Read only the topic that matches the work.
 | opt-in CPU, allocator and process I/O diagnostics | [Harness profiling](docs/harness-profiling.md) | [profiling launcher](harness/profile.py) and diagnostic executable |
 | timing boundaries and interpreting artifacts | [Harness measurement](docs/harness-measurement.md) | [results](harness/src/results.rs) and [report generator](harness/report.py) |
 | workflow and reuse decisions | [Harness decisions](docs/harness-decisions.md) | evaluation and decision records |
+| experimental native Node binding and device enumeration | [Native bridge](native/README.md) | [addon](native/src/lib.rs) |
 | offline rendering behavior | [Offline contract](docs/offline-contract.md) | [offline runtime](harness/src/offline.rs) |
 | external candidate reference review | [Reference review](docs/harness-reference-review.md) | candidate evaluation |
 

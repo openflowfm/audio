@@ -4,7 +4,10 @@ These are incremental proofs for the reusable engine. Stage 1 has a local offlin
 MVP and [comparison harness](harness-decisions.md); the remaining stages are future
 work. The offline module provides the reusable rendering implementation, not a
 separate DSP copy of a device engine. Native output and production integration have
-not been implemented or authorized by this local evaluation.
+not been implemented or authorized by this local evaluation. The
+[experimental native bridge](../native/README.md) now loads the existing offline
+renderer from Node and enumerates native output capabilities without opening
+streams. This is preparation for Stage 2, not its completion or realtime evidence.
 
 | stage | scope | evidence required before proceeding |
 |---|---|---|

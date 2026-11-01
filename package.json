@@ -1,0 +1,18 @@
+{
+  "name": "@openflow/audio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Experimental first-party graph audio binding; offline proof and native device capabilities",
+  "license": "MIT",
+  "main": "native/index.cjs",
+  "types": "native/index.d.ts",
+  "exports": { ".": { "types": "./native/index.d.ts", "default": "./native/index.cjs" } },
+  "engines": { "node": ">=26" },
+  "files": ["native/src", "native/scripts", "native/build.rs", "native/Cargo.toml", "native/Cargo.lock", "native/index.cjs", "native/index.d.ts", "native/dist/audio-flow.node", "harness/src", "harness/build.rs", "harness/fixtures", "harness/Cargo.toml", "harness/Cargo.lock"],
+  "scripts": {
+    "prepare": "node native/scripts/build.mjs",
+    "build": "node native/scripts/build.mjs",
+    "test": "npm test --prefix native",
+    "test:rust": "npm run test:rust --prefix native"
+  }
+}

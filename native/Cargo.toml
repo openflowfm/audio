@@ -1,0 +1,19 @@
+[package]
+name = "audio-flow-native-experimental"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+audio-flow-harness = { path = "../harness" }
+napi = { version = "=2.16.17", features = ["napi8", "serde-json"] }
+napi-derive = "=2.16.13"
+cpal = "=0.15.3"
+serde_json = "=1.0.149"
+
+[build-dependencies]
+napi-build = "=2.1.6"
