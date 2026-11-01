@@ -30,6 +30,49 @@ export function listOutputDevices(): {
     configurationError: string | null;
   }>;
 };
+export interface FixtureHostOptions {
+  deviceId: string;
+  expectedName: string;
+  channels: number;
+  mappings: Array<{ output: 'fixture.left' | 'fixture.right'; physical: number }>;
+}
+export interface FixtureHostSnapshot {
+  closed: boolean;
+  queuedBatches: number;
+  queueFull: number;
+  /** Separate from frame-coherent observation; not an underrun count. */
+  streamErrors: number;
+  observation: null | {
+    outputFrame: number;
+    players: Array<{ sourceFrame: number; status: 0 | 1 | 2; loop: [number, number] | null }>;
+    callbacks: number;
+    appliedBatches: number;
+    rejectedBatches: number;
+    processedBatches: number;
+    deadlineMisses: number;
+    maxCallbackNanos: number;
+    publicationDrops: number;
+    processErrors: number;
+    lastErrorCode: 0 | 1 | 2;
+  };
+}
+export interface QueuedFixtureControl { queuedBatch: number; applied: false }
+export class ExperimentalFixtureHost {
+  private constructor();
+  play(): QueuedFixtureControl;
+  pause(): QueuedFixtureControl;
+  seek(sourceFrame: number): QueuedFixtureControl;
+  setLoop(region: [number, number] | null): QueuedFixtureControl;
+  /** Bounded read, may return stale state; null until first callback publication. */
+  snapshot(): FixtureHostSnapshot;
+  /** Idempotent; Linux worker join may block the calling thread. */
+  close(): void;
+}
+/** EXPLICIT HARDWARE OPT-IN. Opens/starts Linux ALSA output; initially silent.
+ * Short RAM sine fixture ONLY, never recording playback. No automated opening tests.
+ */
+export function openExperimentalFixtureHost(options: FixtureHostOptions): ExperimentalFixtureHost;
+
 /** Fresh deterministic graph on every call; frames defaults to 10, integer 0..4096. */
 export function renderFixture(options?: { frames?: number }): {
   sampleRate: 48000;

@@ -34,6 +34,13 @@ unsafe impl GlobalAlloc for Guard {
 }
 #[global_allocator]
 static ALLOCATOR: Guard = Guard;
+pub(crate) fn assert_no_allocations(f: impl FnOnce()) {
+    CALLS.with(|c| c.set(0));
+    ACTIVE.with(|a| a.set(true));
+    f();
+    ACTIVE.with(|a| a.set(false));
+    assert_eq!(CALLS.with(Cell::get), 0);
+}
 fn program() -> Arc<Program> {
     let limits = Limits::default();
     let mut assets = Assets::new(limits).unwrap();

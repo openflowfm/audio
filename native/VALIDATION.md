@@ -1,5 +1,40 @@
 # Bounded native bridge validation
 
+## Explicit fixture-host checkpoint (wing/cpal-fixture-host)
+
+Implemented an explicit Linux/ALSA CPAL fixture opener and thin NAPI controls.
+No stream was opened or started during implementation or checks; no audio emitted.
+`nativeOutputAvailable` remains false; this is not recording playback support.
+
+- `cargo test --manifest-path native/Cargo.toml --locked`: 5 unit tests pass,
+  including original callback tests and a fake-capability/fixture/publication test.
+  Fake ranges reject wrong channels, non-f32 and missing 48 kHz; descriptor checks
+  reject stale IDs, names and missing names. Existing mapping rejection tests pass.
+- Fixed 12000-frame two-player sine graph uses original renderer; bounded amplitude
+  and coherent two-player/frame publication, atomic command rejection, publication
+  overflow accounting tested without devices. Allocation guards cover processing
+  plus publication success/full-queue paths with zero allocations and frees.
+- `npm test --prefix native`: release build and all 4 original Node tests pass,
+  updated only the exact export list for the two new APIs. No open API invoked.
+- `./harness/verify --output-root /tmp/audio-host-verify`: all original format,
+  build, Rust, doctest and Python checks passed. Report:
+  `/tmp/audio-host-verify/audio-run-m8f8jxtw/report.html`.
+- Native formatting and `git diff --check` pass. Rust unit-test build warns that
+  the opt-in open function is unused in tests, intentionally: tests never open.
+
+CPAL 0.15.3 ALSA source audit: `new_output` moves callback closures onto its
+worker; `Stream::drop` signals wakeup then joins. Renderer/queue allocations are
+prepared before build; callback-owned state is destroyed after the worker exits,
+not inside active processing. Join/driver blocking and panic behavior remain
+unproven live gates. Cross-platform open is rejected pending equivalent audit.
+Publication is copy-only rtrb SPSC (bounded 32-slot read/write); stream errors
+use a separate pointer-width relaxed atomic counter. Snapshot does not spin or
+wait and may be stale. Hardware/UI-stall/deadline/routing/shutdown acceptance,
+true stream-error behavior and cross-thread stress/performance tests are pending.
+No production realtime guarantee follows from these device-free checks.
+
+Exact API, diagnostic codes and lifecycle caveats: [README](README.md).
+
 ## Native output seam checkpoint (wing/native-output)
 
 Implemented renderer borrowed immediate control/observation and prepared-buffer

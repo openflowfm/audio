@@ -4,7 +4,9 @@ const assert = require('node:assert/strict');
 const audio = require('..');
 
 test('real addon exports and explicit offline limits', () => {
-  assert.deepEqual(Object.keys(audio).sort(), ['engineInfo', 'listOutputDevices', 'renderFixture']);
+  assert.deepEqual(Object.keys(audio).sort(), ['ExperimentalFixtureHost', 'engineInfo', 'listOutputDevices', 'openExperimentalFixtureHost', 'renderFixture']);
+  assert.equal(typeof audio.openExperimentalFixtureHost, 'function');
+  // Never invoke open: even a negative stream-opening test is not authorized.
   const info = audio.engineInfo();
   assert.equal(info.experimental, true);
   assert.equal(info.nativeOutputAvailable, false);

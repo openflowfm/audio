@@ -17,6 +17,16 @@ use std::sync::{
 const PUBLICATIONS: usize = 32;
 const FRAMES: usize = 12000;
 
+fn supports(
+    channels: usize,
+    advertised: usize,
+    f32_format: bool,
+    min_rate: u32,
+    max_rate: u32,
+) -> bool {
+    channels == advertised && f32_format && min_rate <= 48000 && max_rate >= 48000
+}
+
 pub(crate) fn program() -> Result<Arc<Program>> {
     let limits = Limits::default();
     let mut assets = Assets::new(limits).map_err(failure)?;
@@ -251,10 +261,13 @@ pub fn open_experimental_fixture_host(options: Value) -> Result<ExperimentalFixt
             .supported_output_configs()
             .map_err(failure)?
             .any(|c| {
-                c.channels() as usize == channels
-                    && c.sample_format() == cpal::SampleFormat::F32
-                    && c.min_sample_rate().0 <= 48000
-                    && c.max_sample_rate().0 >= 48000
+                supports(
+                    channels,
+                    c.channels() as usize,
+                    c.sample_format() == cpal::SampleFormat::F32,
+                    c.min_sample_rate().0,
+                    c.max_sample_rate().0,
+                )
             });
         validate(id, expected, &current, Some(&name), channels, supported)?;
         selected = Some(device);
@@ -308,6 +321,15 @@ mod tests {
     use super::*;
     #[test]
     fn fake_selection_and_signal_publication() {
+        assert!(supports(4, 4, true, 44100, 96000));
+        for (count, f32_format, min, max) in [
+            (2, true, 48000, 48000),
+            (4, false, 48000, 48000),
+            (4, true, 96000, 96000),
+            (4, true, 44100, 44100),
+        ] {
+            assert!(!supports(4, count, f32_format, min, max));
+        }
         assert!(validate("Alsa:1", "x", "Alsa:1", Some("x"), 4, true).is_ok());
         for (id, name, channels, supported) in [
             ("Alsa:2", Some("x"), 4, true),
@@ -361,9 +383,12 @@ mod tests {
         publish.publish(&callback, false);
         let p = read.pop().unwrap();
         assert_eq!((p.rejected, p.players[1].status, p.frame), (1, 1, 128));
-        for _ in 0..PUBLICATIONS + 2 {
-            publish.publish(&callback, false);
-        }
+        crate::output_tests::assert_no_allocations(|| {
+            for _ in 0..PUBLICATIONS + 2 {
+                callback.process(&mut data).unwrap();
+                publish.publish(&callback, false);
+            }
+        });
         assert_eq!(publish.dropped, 2);
     }
 }
