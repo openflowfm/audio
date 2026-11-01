@@ -1,0 +1,14 @@
+{
+  "name": "@openflow/audio-native-experimental",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Experimental offline graph Node binding; no native playback",
+  "main": "index.cjs",
+  "types": "index.d.ts",
+  "engines": { "node": ">=26" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test test/*.test.cjs",
+    "test:rust": "cargo test --locked"
+  }
+}
