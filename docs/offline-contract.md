@@ -49,6 +49,24 @@ observation between blocks gives next output frame, each player's next source fr
 status and loop, active revision and pending batch count. Rendering silence still
 advances output time. No implicit retrigger occurs at source end.
 
+### Borrowed callback seam
+
+`apply_immediate(revision, &[Command])` validates the entire borrowed batch before
+mutation, using the same target/seek/loop validation as enqueue. It rejects empty,
+oversized and stale batches; its command count is bounded by both batch and
+per-frame limits. It applies now, in list order, **before** previously queued timed
+commands at the next output frame. It retains no command storage. Callers must
+bound the number of immediate batches per callback; repeated calls do not share
+an aggregate per-frame budget. Existing timed enqueue semantics are unchanged.
+
+`observe_ref()` borrows the authoritative player slice without cloning or
+allocation. `render_into_prefix(buffers, frames)` renders into existing planar
+buffer prefixes without changing their lengths; it validates all buffer capacities
+and frame limits before mutation and leaves tails untouched. These three methods
+have allocator-guard coverage including rejected batches. Enqueue, allocating
+observe, revision queue reclamation and render-state destruction are **not**
+callback control APIs. This is not a production realtime-safety guarantee.
+
 `advance_revision(new)` requires a strictly greater revision, clears all pending
 batches and leaves current players/output time untouched. Enqueue must match the
 active revision (initially 0). Cancellation is immediate between renders; it is not

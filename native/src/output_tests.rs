@@ -100,6 +100,8 @@ fn literal_channels_partition_invariance_and_no_allocation_or_free() {
 #[test]
 fn bounded_queue_atomic_rejections_pause_seek_and_readback() {
     let (mut c, mut callback) = prepare(2);
+    CALLS.with(|c| c.set(0));
+    ACTIVE.with(|a| a.set(true));
     send(&mut c, &[Command::Start(0), Command::Seek(0, 5)]);
     let mut output = [9.; 8];
     callback.process(&mut output).unwrap();
@@ -129,6 +131,8 @@ fn bounded_queue_atomic_rejections_pause_seek_and_readback() {
         callback.diagnostics.applied_batches - applied,
         BATCHES_PER_CALLBACK as u64
     );
+    ACTIVE.with(|a| a.set(false));
+    assert_eq!(CALLS.with(Cell::get), 0);
 }
 #[test]
 fn configuration_and_span_rejections() {
