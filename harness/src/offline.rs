@@ -301,6 +301,9 @@ impl Program {
     pub fn output_names(&self) -> Vec<&str> {
         self.outputs.iter().map(|(name, _)| name.as_str()).collect()
     }
+    pub fn block_frame_limit(&self) -> usize {
+        self.limits.block_frames
+    }
     pub fn player_count(&self) -> usize {
         self.assets.len()
     }
