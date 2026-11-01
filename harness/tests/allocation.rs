@@ -127,3 +127,39 @@ fn native_block_loop_render_does_not_allocate_or_free() {
         assert_eq!(output[0], w.expected());
     }
 }
+
+#[test]
+fn borrowed_callback_control_observation_and_prefix_do_not_allocate_or_free() {
+    let mut assets = Assets::new(Limits::default()).unwrap();
+    assets.load(&[1., 2., 3., 4.], 48000).unwrap();
+    let program = Graph {
+        nodes: vec![Node::Player { asset: 0 }],
+        outputs: vec![("main".into(), 0)],
+    }
+    .compile(&assets, Limits::default())
+    .unwrap();
+    let mut state = RenderState::new(Arc::new(program));
+    let mut output = vec![vec![0.; 8]];
+    CALLS.with(|calls| calls.set(0));
+    ACTIVE.with(|active| active.set(true));
+    let applied = state.apply_immediate(
+        0,
+        &[
+            Command::Seek(0, 1),
+            Command::SetLoop(0, Some((1, 3))),
+            Command::Start(0),
+        ],
+    );
+    let rejected = state.apply_immediate(0, &[Command::Stop(0), Command::Seek(0, 5)]);
+    let rendered = state.render_into_prefix(&mut output, 5);
+    let observation = state.observe_ref();
+    let frame = observation.output_frame;
+    let position = observation.players[0].position;
+    ACTIVE.with(|active| active.set(false));
+    assert_eq!(CALLS.with(Cell::get), 0);
+    assert!(applied.is_ok());
+    assert_eq!(rejected, Err(Error::InvalidSeek));
+    assert!(rendered.is_ok());
+    assert_eq!((frame, position), (5, 2));
+    assert_eq!(output[0], [2., 3., 2., 3., 2., 0., 0., 0.]);
+}
