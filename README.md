@@ -1,7 +1,7 @@
 # audio[flow]
 
 An experimental reusable, headless Rust audio library for open[flow], with
-mix[flow] as its intended first consumer. This independent repository contains
+wing[flow] as its bounded first end-to-end consumer and mix[flow] supplying richer timing requirements. This independent repository contains
 an offline Graph → Program → mutable render-state implementation and a comparison
 harness with source, tests,
 a locked Cargo package, fixtures and a Python report generator. It is not yet a
@@ -11,6 +11,8 @@ The local offline MVP covers RAM players, fixed gain/sum, named outputs and time
 atomic command batches. An [experimental native Node binding](native/README.md) reuses that renderer and
 queries output-device capabilities without opening streams. Native output,
 stretching and application integration remain deferred. Comparative results do not select a production engine.
+
+The repository root is also the experimental `@openflow/audio` Node package. Consumers pin a Git commit; its `prepare` builds the addon locally (Rust/Cargo and platform audio development libraries required). `npm run build` and `npm test` exercise the same native package. This is source-build development integration, not prebuilt production distribution.
 
 This is an index. Read only the topic that matches the work.
 
