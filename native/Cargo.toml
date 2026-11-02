@@ -12,7 +12,7 @@ crate-type = ["cdylib", "rlib"]
 audio-flow-harness = { path = "../harness" }
 napi = { version = "=2.16.17", features = ["napi8", "serde-json"] }
 napi-derive = "=2.16.13"
-cpal = "=0.15.3"
+cpal = "=0.18.2"
 serde_json = "=1.0.149"
 rtrb = "=0.3.2"
 
